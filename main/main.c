@@ -3,7 +3,7 @@
 // #include "freertos/task.h"
 // #include "tb6612.h"
 
-// tb6612_motor_t motorA = {
+// tb6612_motor_t motor1 = {
 //     .in1_pin = GPIO_NUM_4,
 //     .in2_pin = GPIO_NUM_5,
 //     .pwm_pin = GPIO_NUM_6,
@@ -13,7 +13,7 @@
 //     .max_rpm = 40.0f,
 // };
 
-// tb6612_motor_t motorB = {
+// tb6612_motor_t motor2 = {
 //     .in1_pin = GPIO_NUM_12,
 //     .in2_pin = GPIO_NUM_13,
 //     .pwm_pin = GPIO_NUM_14,
@@ -25,19 +25,19 @@
 
 // void app_main(void)
 // {
-//     tb6612_motor_init(&motorA);
-//     tb6612_motor_init(&motorB);
+//     tb6612_motor_init(&motor1);
+//     tb6612_motor_init(&motor2);
 
 //     while (1)
 //     {
-//         printf("motorA: forward, motorB: reverse\n");
-//         tb6612_motor_set_speed(&motorA, 3.14f); // forward
-//         tb6612_motor_set_speed(&motorB, -2.0f); // reverse
+//         printf("motor1: forward, motor2: reverse\n");
+//         tb6612_motor_set_speed(&motor1, 3.14f); // forward
+//         tb6612_motor_set_speed(&motor2, -2.0f); // reverse
 //         vTaskDelay(pdMS_TO_TICKS(2000));
 
 //         printf("Stopping both motors\n");
-//         tb6612_motor_set_speed(&motorA, 0.0f);
-//         tb6612_motor_set_speed(&motorB, 0.0f);
+//         tb6612_motor_set_speed(&motor1, 0.0f);
+//         tb6612_motor_set_speed(&motor2, 0.0f);
 //         vTaskDelay(pdMS_TO_TICKS(1000));
 //     }
 // }
@@ -63,11 +63,11 @@
 
 #define I2C_FREQ_HZ 400000
 
-#define ENDSTOP_PIN GPIO_NUM_11
-#define HALL_PIN GPIO_NUM_8
+#define ENDSTOP_A_PIN GPIO_NUM_11
+#define ENDSTOP_B_PIN GPIO_NUM_8
 
-tb6612_motor_t motorA, motorB;
-as5600_t encoder1, encoder2;
+tb6612_motor_t motor1, motor2;
+as5600_t encoderA, encoderB;
 
 void gpio_input_init(gpio_num_t pin)
 {
@@ -97,20 +97,20 @@ void i2c_bus_init(i2c_port_t i2c_num, gpio_num_t sda, gpio_num_t scl)
 
 void app_main(void)
 {
-    gpio_input_init(ENDSTOP_PIN);
-    gpio_input_init(HALL_PIN);
+    gpio_input_init(ENDSTOP_A_PIN);
+    gpio_input_init(ENDSTOP_B_PIN);
 
     i2c_bus_init(I2C_MASTER_NUM_0, I2C_MASTER_SDA_IO_0, I2C_MASTER_SCL_IO_0);
     i2c_bus_init(I2C_MASTER_NUM_1, I2C_MASTER_SDA_IO_1, I2C_MASTER_SCL_IO_1);
 
-    tb6612_motor_init(&motorA, GPIO_NUM_4, GPIO_NUM_5, GPIO_NUM_6, MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, 40.0f);
-    tb6612_motor_init(&motorB, GPIO_NUM_12, GPIO_NUM_13, GPIO_NUM_14, MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_A, 40.0f);
+    tb6612_motor_init(&motor1, GPIO_NUM_4, GPIO_NUM_5, GPIO_NUM_6, MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, 40.0f);
+    tb6612_motor_init(&motor2, GPIO_NUM_12, GPIO_NUM_13, GPIO_NUM_14, MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_A, 40.0f);
 
-    tb6612_motor_set_speed(&motorA, 3.14f);
-    tb6612_motor_set_speed(&motorB, -2.0f);
+    tb6612_motor_set_speed(&motor1, 3.14f);
+    tb6612_motor_set_speed(&motor2, -2.0f);
 
-    bool ok1 = as5600_init(&encoder1, I2C_MASTER_NUM_0, AS5600_DEFAULT_ADDR, 0.1f, 0.01f, 1.0f);
-    bool ok2 = as5600_init(&encoder2, I2C_MASTER_NUM_1, AS5600_DEFAULT_ADDR, 0.1f, 0.01f, 1.0f);
+    bool ok1 = as5600_init(&encoderA, I2C_MASTER_NUM_0, AS5600_DEFAULT_ADDR, 0.1f, 0.01f, 1.0f);
+    bool ok2 = as5600_init(&encoderB, I2C_MASTER_NUM_1, AS5600_DEFAULT_ADDR, 0.1f, 0.01f, 1.0f);
 
     if (!ok1 || !ok2)
     {
@@ -122,18 +122,18 @@ void app_main(void)
 
     while (1)
     {
-        int endstop = gpio_get_level(ENDSTOP_PIN);
-        int hall = !gpio_get_level(HALL_PIN);
+        int endstop_a_state = gpio_get_level(ENDSTOP_A_PIN);
+        int endstop_b_state = !gpio_get_level(ENDSTOP_B_PIN);
 
-        as5600_update(&encoder1);
-        as5600_update(&encoder2);
+        as5600_update(&encoderA);
+        as5600_update(&encoderB);
 
-        float pos1 = as5600_get_position(&encoder1);
-        float vel1 = as5600_get_velocity(&encoder1);
-        float pos2 = as5600_get_position(&encoder2);
-        float vel2 = as5600_get_velocity(&encoder2);
+        float pos1 = as5600_get_position(&encoderA);
+        float vel1 = as5600_get_velocity(&encoderA);
+        float pos2 = as5600_get_position(&encoderB);
+        float vel2 = as5600_get_velocity(&encoderB);
 
-        ESP_LOGI(TAG, "E1: %.3frad %.3frad/s | E2: %.3frad %.3frad/s | Endstop: %d | Hall: %d", pos1, vel1, pos2, vel2, endstop, hall);
+        ESP_LOGI(TAG, "E1: %.3frad %.3frad/s | E2: %.3frad %.3frad/s | Endstop: %d | Hall: %d", pos1, vel1, pos2, vel2, endstop_a_state, endstop_b_state);
 
         vTaskDelay(pdMS_TO_TICKS(10));
     }
