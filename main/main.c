@@ -66,26 +66,7 @@
 #define ENDSTOP_PIN GPIO_NUM_11
 #define HALL_PIN GPIO_NUM_8
 
-tb6612_motor_t motorA = {
-    .in1_pin = GPIO_NUM_4,
-    .in2_pin = GPIO_NUM_5,
-    .pwm_pin = GPIO_NUM_6,
-    .unit = MCPWM_UNIT_0,
-    .timer = MCPWM_TIMER_0,
-    .op = MCPWM_OPR_A,
-    .max_rpm = 40.0f,
-};
-
-tb6612_motor_t motorB = {
-    .in1_pin = GPIO_NUM_12,
-    .in2_pin = GPIO_NUM_13,
-    .pwm_pin = GPIO_NUM_14,
-    .unit = MCPWM_UNIT_0,
-    .timer = MCPWM_TIMER_1,
-    .op = MCPWM_OPR_A,
-    .max_rpm = 40.0f,
-};
-
+tb6612_motor_t motorA, motorB;
 as5600_t encoder1, encoder2;
 
 void gpio_input_init(gpio_num_t pin)
@@ -122,8 +103,8 @@ void app_main(void)
     i2c_bus_init(I2C_MASTER_NUM_0, I2C_MASTER_SDA_IO_0, I2C_MASTER_SCL_IO_0);
     i2c_bus_init(I2C_MASTER_NUM_1, I2C_MASTER_SDA_IO_1, I2C_MASTER_SCL_IO_1);
 
-    tb6612_motor_init(&motorA);
-    tb6612_motor_init(&motorB);
+    tb6612_motor_init(&motorA, GPIO_NUM_4, GPIO_NUM_5, GPIO_NUM_6, MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, 40.0f);
+    tb6612_motor_init(&motorB, GPIO_NUM_12, GPIO_NUM_13, GPIO_NUM_14, MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_A, 40.0f);
 
     tb6612_motor_set_speed(&motorA, 3.14f);
     tb6612_motor_set_speed(&motorB, -2.0f);

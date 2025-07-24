@@ -6,8 +6,16 @@ static inline float rpm_to_rad_per_sec(float rpm)
     return (rpm * 2.0f * M_PI) / 60.0f;
 }
 
-void tb6612_motor_init(const tb6612_motor_t *motor)
+void tb6612_motor_init(tb6612_motor_t *motor, gpio_num_t in1_pin, gpio_num_t in2_pin, gpio_num_t pwm_pin, mcpwm_unit_t unit, mcpwm_timer_t timer, mcpwm_operator_t op, float max_rpm)
 {
+    motor->in1_pin = in1_pin;
+    motor->in2_pin = in2_pin;
+    motor->pwm_pin = pwm_pin;
+    motor->unit = unit;
+    motor->timer = timer;
+    motor->op = op;
+    motor->max_rpm = max_rpm;
+
     // Configure IN1 and IN2 as output
     gpio_config_t io_conf = {
         .pin_bit_mask = (1ULL << motor->in1_pin) | (1ULL << motor->in2_pin),
