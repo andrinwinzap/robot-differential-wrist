@@ -1,47 +1,3 @@
-// #include <stdio.h>
-// #include "freertos/FreeRTOS.h"
-// #include "freertos/task.h"
-// #include "tb6612.h"
-
-// tb6612_motor_t motor1 = {
-//     .in1_pin = GPIO_NUM_4,
-//     .in2_pin = GPIO_NUM_5,
-//     .pwm_pin = GPIO_NUM_6,
-//     .unit = MCPWM_UNIT_0,
-//     .timer = MCPWM_TIMER_0,
-//     .op = MCPWM_OPR_A,
-//     .max_rpm = 40.0f,
-// };
-
-// tb6612_motor_t motor2 = {
-//     .in1_pin = GPIO_NUM_12,
-//     .in2_pin = GPIO_NUM_13,
-//     .pwm_pin = GPIO_NUM_14,
-//     .unit = MCPWM_UNIT_0,
-//     .timer = MCPWM_TIMER_1,
-//     .op = MCPWM_OPR_A,
-//     .max_rpm = 40.0f,
-// };
-
-// void app_main(void)
-// {
-//     tb6612_motor_init(&motor1);
-//     tb6612_motor_init(&motor2);
-
-//     while (1)
-//     {
-//         printf("motor1: forward, motor2: reverse\n");
-//         tb6612_motor_set_speed(&motor1, 3.14f); // forward
-//         tb6612_motor_set_speed(&motor2, -2.0f); // reverse
-//         vTaskDelay(pdMS_TO_TICKS(2000));
-
-//         printf("Stopping both motors\n");
-//         tb6612_motor_set_speed(&motor1, 0.0f);
-//         tb6612_motor_set_speed(&motor2, 0.0f);
-//         vTaskDelay(pdMS_TO_TICKS(1000));
-//     }
-// }
-
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -50,6 +6,7 @@
 #include "as5600.h"
 #include "esp_log.h"
 #include "tb6612.h"
+#include "diff_speed_ctrl.h"
 
 #define TAG "AS5600_DUAL"
 
@@ -67,6 +24,23 @@
 #define ENDSTOP_B_PIN GPIO_NUM_8
 
 tb6612_motor_t motor1, motor2;
+
+void motor1_cb(float speed)
+{
+    tb6612_motor_set_speed(&motor1, speed);
+}
+
+void motor2_cb(float speed)
+{
+    tb6612_motor_set_speed(&motor2, speed);
+}
+
+diff_speed_ctrl_t speed_controller = {
+    .cb1 = &motor1_cb,
+    .cb2 = &motor2_cb,
+    .common_speed = 0.0f,
+    .differential_speed = 0.0f};
+
 as5600_t encoderA, encoderB;
 
 void gpio_input_init(gpio_num_t pin)
@@ -106,8 +80,8 @@ void app_main(void)
     tb6612_motor_init(&motor1, GPIO_NUM_4, GPIO_NUM_5, GPIO_NUM_6, MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, 40.0f);
     tb6612_motor_init(&motor2, GPIO_NUM_12, GPIO_NUM_13, GPIO_NUM_14, MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_A, 40.0f);
 
-    tb6612_motor_set_speed(&motor1, 3.14f);
-    tb6612_motor_set_speed(&motor2, -2.0f);
+    set_common_speed(&speed_controller, 4.0f);
+    set_differential_speed(&speed_controller, 0.0f);
 
     bool ok1 = as5600_init(&encoderA, I2C_MASTER_NUM_0, AS5600_DEFAULT_ADDR, 0.1f, 0.01f, 1.0f);
     bool ok2 = as5600_init(&encoderB, I2C_MASTER_NUM_1, AS5600_DEFAULT_ADDR, 0.1f, 0.01f, 1.0f);
