@@ -6,11 +6,12 @@
 
 typedef struct
 {
-    gpio_num_t dir_pin;
-    gpio_num_t pwm_gpio;
+    gpio_num_t in1_pin;
+    gpio_num_t in2_pin;
+    gpio_num_t pwm_pin; // Connected to TB6612 PWM
     mcpwm_unit_t unit;
     mcpwm_timer_t timer;
-    mcpwm_operator_t op;
+    mcpwm_operator_t op; // A or B
     float max_rpm;
 } tb6612_motor_t;
 
