@@ -7,16 +7,17 @@
 #include "esp_log.h"
 #include "tb6612.h"
 #include "diff_speed_ctrl.h"
+#include "pid.h"
 
 #define TAG "AS5600_DUAL"
 
-#define I2C_MASTER_NUM_0 I2C_NUM_0
-#define I2C_MASTER_SDA_IO_0 18
-#define I2C_MASTER_SCL_IO_0 17
-
-#define I2C_MASTER_NUM_1 I2C_NUM_1
+#define I2C_MASTER_NUM_1 I2C_NUM_0
 #define I2C_MASTER_SDA_IO_1 10
 #define I2C_MASTER_SCL_IO_1 9
+
+#define I2C_MASTER_NUM_0 I2C_NUM_1
+#define I2C_MASTER_SDA_IO_0 18
+#define I2C_MASTER_SCL_IO_0 17
 
 #define I2C_FREQ_HZ 400000
 
@@ -25,7 +26,12 @@
 
 #define COMMON_GEAR_RATIO
 
+#define PID_LOOP_FREQUENCY 10
 tb6612_motor_t motor1, motor2;
+pid_controller_t pidA, pidB;
+
+float common_position_target = 0.0f;
+float differential_position_target = 0.0f;
 
 void motor1_cb(float speed)
 {
@@ -72,6 +78,36 @@ void i2c_bus_init(i2c_port_t i2c_num, gpio_num_t sda, gpio_num_t scl)
     ESP_ERROR_CHECK(i2c_driver_install(i2c_num, conf.mode, 0, 0, 0));
 }
 
+void pid_loop_task(void *param)
+{
+    float dt_s = 1.0f / PID_LOOP_FREQUENCY;
+    float dt_ms = 1000 / PID_LOOP_FREQUENCY;
+
+    for (;;)
+    {
+        as5600_update(&encoderA);
+        as5600_update(&encoderB);
+
+        // Differential
+        float differential_position_measured = -as5600_get_position(&encoderA);
+        float differential_control_signal = pid_update(&pidA, differential_position_target, differential_position_measured, dt_s);
+        set_differential_speed(&speed_controller, differential_control_signal);
+
+        // Common
+        float common_position_measured = -as5600_get_position(&encoderB);
+        float common_control_signal = pid_update(&pidB, common_position_target, common_position_measured, dt_s);
+        set_common_speed(&speed_controller, common_control_signal);
+
+        ESP_LOGI("PID_LOOP",
+                 "Common: target=%.2f, measured=%.2f, ctrl=%.2f | "
+                 "Diff: target=%.2f, measured=%.2f, ctrl=%.2f",
+                 common_position_target, common_position_measured, common_control_signal,
+                 differential_position_target, differential_position_measured, differential_control_signal);
+
+        vTaskDelay(pdMS_TO_TICKS(dt_ms));
+    }
+}
+
 void app_main(void)
 {
     gpio_input_init(ENDSTOP_A_PIN);
@@ -83,8 +119,8 @@ void app_main(void)
     tb6612_motor_init(&motor1, GPIO_NUM_4, GPIO_NUM_5, GPIO_NUM_6, MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A);
     tb6612_motor_init(&motor2, GPIO_NUM_12, GPIO_NUM_13, GPIO_NUM_14, MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_A);
 
-    set_common_speed(&speed_controller, -0.5f);
-    set_differential_speed(&speed_controller, 0.0f);
+    pid_init(&pidA, 5.0f, 0.0f, 0.0f, 0.0f);
+    pid_init(&pidB, 5.0f, 0.0f, 0.0f, 0.0f);
 
     bool ok1 = as5600_init(&encoderA, I2C_MASTER_NUM_0, AS5600_DEFAULT_ADDR, 0.1f, 0.01f, 1.0f);
     bool ok2 = as5600_init(&encoderB, I2C_MASTER_NUM_1, AS5600_DEFAULT_ADDR, 0.1f, 0.01f, 1.0f);
@@ -97,16 +133,33 @@ void app_main(void)
 
     ESP_LOGI(TAG, "Encoders initialized on I2C_NUM_0 and I2C_NUM_1.");
 
-    while (1)
+    xTaskCreatePinnedToCore(
+        pid_loop_task,
+        "pid_loop",
+        8000,
+        NULL,
+        10,
+        NULL,
+        1);
+
+    while (!gpio_get_level(ENDSTOP_A_PIN))
     {
-        as5600_update(&encoderA);
-        as5600_update(&encoderB);
-
-        float vel1 = as5600_get_velocity(&encoderA);
-        float vel2 = as5600_get_velocity(&encoderB);
-
-        ESP_LOGI(TAG, "A1: %.3frad/s | A2: %.3frad/s", vel1, vel2);
-
+        differential_position_target += 0.005;
         vTaskDelay(pdMS_TO_TICKS(10));
     }
+    as5600_set_position(&encoderA, 0.0f);
+    differential_position_target = -3.14f;
+
+    ESP_LOGI(TAG, "AXIS A HOMED");
+
+    while (fabs(-as5600_get_position(&encoderA) + 3.14) > 0.1)
+        ;
+
+    while (gpio_get_level(ENDSTOP_B_PIN))
+    {
+        common_position_target += 0.005;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    as5600_set_position(&encoderB, 0.0f);
+    common_position_target = 0.0f;
 }
