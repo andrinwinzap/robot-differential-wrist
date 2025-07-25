@@ -8,6 +8,7 @@
 #include "tb6612.h"
 #include "diff_speed_ctrl.h"
 #include "pid.h"
+#include "nvs_flash.h"
 
 #define TAG "AS5600_DUAL"
 
@@ -27,6 +28,10 @@
 #define COMMON_GEAR_RATIO
 
 #define PID_LOOP_FREQUENCY 10
+#define HOMING_SPEED 1.5 // rad/s
+
+#define CTRL_SIGNAL_THRESHOLD 0.03f
+
 tb6612_motor_t motor1, motor2;
 pid_controller_t pidA, pidB;
 
@@ -91,11 +96,15 @@ void pid_loop_task(void *param)
         // Differential
         float differential_position_measured = as5600_get_position(&encoderA);
         float differential_control_signal = pid_update(&pidA, differential_position_target, differential_position_measured, dt_s);
+        if (fabsf(differential_control_signal) < CTRL_SIGNAL_THRESHOLD)
+            differential_control_signal = 0.0f;
         set_differential_speed(&speed_controller, differential_control_signal);
 
         // Common
         float common_position_measured = as5600_get_position(&encoderB);
         float common_control_signal = pid_update(&pidB, common_position_target, common_position_measured, dt_s);
+        if (fabsf(common_control_signal) < CTRL_SIGNAL_THRESHOLD)
+            common_control_signal = 0.0f;
         set_common_speed(&speed_controller, common_control_signal);
 
         ESP_LOGI("PID_LOOP",
@@ -110,6 +119,16 @@ void pid_loop_task(void *param)
 
 void app_main(void)
 {
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
+    {
+        ESP_LOGW(TAG, "NVS partition truncated or new version found, erasing...");
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+    ESP_LOGI(TAG, "NVS initialized successfully");
+
     gpio_input_init(ENDSTOP_A_PIN);
     gpio_input_init(ENDSTOP_B_PIN);
 
@@ -119,19 +138,22 @@ void app_main(void)
     tb6612_motor_init(&motor1, GPIO_NUM_4, GPIO_NUM_5, GPIO_NUM_6, MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A);
     tb6612_motor_init(&motor2, GPIO_NUM_12, GPIO_NUM_13, GPIO_NUM_14, MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_A);
 
-    pid_init(&pidA, 5.0f, 0.0f, 0.0f, 0.0f);
-    pid_init(&pidB, 5.0f, 0.0f, 0.0f, 0.0f);
+    pid_init(&pidA, 3.0f, 0.0f, 0.0f, 0.0f);
+    pid_init(&pidB, 3.0f, 0.0f, 0.0f, 0.0f);
 
     bool ok1 = as5600_init(&encoderA, I2C_MASTER_NUM_0, AS5600_DEFAULT_ADDR, 0.1f, 0.01f, 1.0f, -1);
     bool ok2 = as5600_init(&encoderB, I2C_MASTER_NUM_1, AS5600_DEFAULT_ADDR, 0.1f, 0.01f, 1.0f, -1);
 
-    if (!ok1 || !ok2)
-    {
-        ESP_LOGE(TAG, "Failed to initialize one or both encoders (ok1=%d, ok2=%d)", ok1, ok2);
-        return;
-    }
+    // if (!ok1 || !ok2)
+    // {
+    //     ESP_LOGE(TAG, "Failed to initialize one or both encoders (ok1=%d, ok2=%d)", ok1, ok2);
+    //     return;
+    // }
 
     ESP_LOGI(TAG, "Encoders initialized on I2C_NUM_0 and I2C_NUM_1.");
+
+    differential_position_target = as5600_get_position(&encoderA);
+    common_position_target = as5600_get_position(&encoderB);
 
     xTaskCreatePinnedToCore(
         pid_loop_task,
@@ -144,7 +166,7 @@ void app_main(void)
 
     while (!gpio_get_level(ENDSTOP_A_PIN))
     {
-        differential_position_target += 0.005;
+        differential_position_target += HOMING_SPEED * 0.01;
         vTaskDelay(pdMS_TO_TICKS(10));
     }
     as5600_set_position(&encoderA, M_PI / 2.0f);
@@ -155,13 +177,17 @@ void app_main(void)
     while (fabs(as5600_get_position(&encoderA) - differential_position_target) > 0.1)
         ;
 
+    common_position_target = 0.0f;
+    while (fabs(as5600_get_position(&encoderB) > 0.1))
+        ;
+
     while (gpio_get_level(ENDSTOP_B_PIN))
     {
-        common_position_target += 0.005;
+        common_position_target += HOMING_SPEED * 0.01;
         vTaskDelay(pdMS_TO_TICKS(10));
     }
     as5600_set_position(&encoderB, 0.0f);
-    common_position_target = 0.0f;
+    common_position_target = 0.5f;
 
     differential_position_target = 0.0f;
 }
