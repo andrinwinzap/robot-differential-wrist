@@ -7,6 +7,7 @@ typedef struct
 {
     speed_cb_t cb1;
     speed_cb_t cb2;
+    float gear_ratio;
     float common_speed;
     float differential_speed;
 } diff_speed_ctrl_t;

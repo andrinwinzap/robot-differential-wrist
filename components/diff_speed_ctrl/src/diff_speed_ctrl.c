@@ -2,11 +2,12 @@
 
 void update_outputs(diff_speed_ctrl_t *ctrl)
 {
-    if (ctrl->cb1)
-        ctrl->cb1(ctrl->common_speed + ctrl->differential_speed);
+    float add_scaled = ctrl->common_speed / ctrl->gear_ratio;
 
+    if (ctrl->cb1)
+        ctrl->cb1(add_scaled + ctrl->differential_speed);
     if (ctrl->cb2)
-        ctrl->cb2(ctrl->common_speed - ctrl->differential_speed);
+        ctrl->cb2(add_scaled - ctrl->differential_speed);
 }
 
 void set_common_speed(diff_speed_ctrl_t *ctrl, float speed)

@@ -23,6 +23,8 @@
 #define ENDSTOP_A_PIN GPIO_NUM_11
 #define ENDSTOP_B_PIN GPIO_NUM_8
 
+#define COMMON_GEAR_RATIO
+
 tb6612_motor_t motor1, motor2;
 
 void motor1_cb(float speed)
@@ -38,6 +40,7 @@ void motor2_cb(float speed)
 diff_speed_ctrl_t speed_controller = {
     .cb1 = &motor1_cb,
     .cb2 = &motor2_cb,
+    .gear_ratio = 20.0f / 29.0f,
     .common_speed = 0.0f,
     .differential_speed = 0.0f};
 
@@ -80,7 +83,7 @@ void app_main(void)
     tb6612_motor_init(&motor1, GPIO_NUM_4, GPIO_NUM_5, GPIO_NUM_6, MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, 40.0f);
     tb6612_motor_init(&motor2, GPIO_NUM_12, GPIO_NUM_13, GPIO_NUM_14, MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_A, 40.0f);
 
-    set_common_speed(&speed_controller, 4.0f);
+    set_common_speed(&speed_controller, -1.0f);
     set_differential_speed(&speed_controller, 0.0f);
 
     bool ok1 = as5600_init(&encoderA, I2C_MASTER_NUM_0, AS5600_DEFAULT_ADDR, 0.1f, 0.01f, 1.0f);
@@ -96,18 +99,13 @@ void app_main(void)
 
     while (1)
     {
-        int endstop_a_state = gpio_get_level(ENDSTOP_A_PIN);
-        int endstop_b_state = !gpio_get_level(ENDSTOP_B_PIN);
-
         as5600_update(&encoderA);
         as5600_update(&encoderB);
 
-        float pos1 = as5600_get_position(&encoderA);
         float vel1 = as5600_get_velocity(&encoderA);
-        float pos2 = as5600_get_position(&encoderB);
         float vel2 = as5600_get_velocity(&encoderB);
 
-        ESP_LOGI(TAG, "E1: %.3frad %.3frad/s | E2: %.3frad %.3frad/s | Endstop: %d | Hall: %d", pos1, vel1, pos2, vel2, endstop_a_state, endstop_b_state);
+        ESP_LOGI(TAG, "A1: %.3frad/s | A2: %.3frad/s", vel1, vel2);
 
         vTaskDelay(pdMS_TO_TICKS(10));
     }
