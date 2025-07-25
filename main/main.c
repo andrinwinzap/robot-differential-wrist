@@ -89,12 +89,12 @@ void pid_loop_task(void *param)
         as5600_update(&encoderB);
 
         // Differential
-        float differential_position_measured = -as5600_get_position(&encoderA);
+        float differential_position_measured = as5600_get_position(&encoderA);
         float differential_control_signal = pid_update(&pidA, differential_position_target, differential_position_measured, dt_s);
         set_differential_speed(&speed_controller, differential_control_signal);
 
         // Common
-        float common_position_measured = -as5600_get_position(&encoderB);
+        float common_position_measured = as5600_get_position(&encoderB);
         float common_control_signal = pid_update(&pidB, common_position_target, common_position_measured, dt_s);
         set_common_speed(&speed_controller, common_control_signal);
 
@@ -122,8 +122,8 @@ void app_main(void)
     pid_init(&pidA, 5.0f, 0.0f, 0.0f, 0.0f);
     pid_init(&pidB, 5.0f, 0.0f, 0.0f, 0.0f);
 
-    bool ok1 = as5600_init(&encoderA, I2C_MASTER_NUM_0, AS5600_DEFAULT_ADDR, 0.1f, 0.01f, 1.0f);
-    bool ok2 = as5600_init(&encoderB, I2C_MASTER_NUM_1, AS5600_DEFAULT_ADDR, 0.1f, 0.01f, 1.0f);
+    bool ok1 = as5600_init(&encoderA, I2C_MASTER_NUM_0, AS5600_DEFAULT_ADDR, 0.1f, 0.01f, 1.0f, -1);
+    bool ok2 = as5600_init(&encoderB, I2C_MASTER_NUM_1, AS5600_DEFAULT_ADDR, 0.1f, 0.01f, 1.0f, -1);
 
     if (!ok1 || !ok2)
     {
@@ -147,12 +147,12 @@ void app_main(void)
         differential_position_target += 0.005;
         vTaskDelay(pdMS_TO_TICKS(10));
     }
-    as5600_set_position(&encoderA, 0.0f);
-    differential_position_target = -3.14f;
+    as5600_set_position(&encoderA, M_PI / 2.0f);
+    differential_position_target = -M_PI / 2.0f;
 
     ESP_LOGI(TAG, "AXIS A HOMED");
 
-    while (fabs(-as5600_get_position(&encoderA) + 3.14) > 0.1)
+    while (fabs(as5600_get_position(&encoderA) - differential_position_target) > 0.1)
         ;
 
     while (gpio_get_level(ENDSTOP_B_PIN))
@@ -162,4 +162,6 @@ void app_main(void)
     }
     as5600_set_position(&encoderB, 0.0f);
     common_position_target = 0.0f;
+
+    differential_position_target = 0.0f;
 }
