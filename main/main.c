@@ -18,18 +18,27 @@
 #define TAG "AS5600_DUAL"
 
 SemaphoreHandle_t pid_semaphore;
+SemaphoreHandle_t homing_semaphore;
 
 tb6612_motor_t motor1, motor2;
 pid_controller_t pidA, pidB;
 
 pid_position_ctrl_t pid_position_ctrl;
+pid_speed_ctrl_t pid_speed_ctrl;
+as5600_t encoderA, encoderB;
+
+static homing_params_t homing_params;
 
 void IRAM_ATTR timer_isr(void *arg)
 {
     BaseType_t high_task_wakeup = pdFALSE;
+
     timer_group_clr_intr_status_in_isr(TIMER_GROUP, TIMER_IDX);
     timer_group_enable_alarm_in_isr(TIMER_GROUP, TIMER_IDX);
+
     xSemaphoreGiveFromISR(pid_semaphore, &high_task_wakeup);
+    xSemaphoreGiveFromISR(homing_semaphore, &high_task_wakeup);
+
     if (high_task_wakeup)
     {
         portYIELD_FROM_ISR();
@@ -72,8 +81,6 @@ diff_speed_ctrl_t speed_controller = {
     .gear_ratio = 20.0f / 29.0f,
     .common_speed = 0.0f,
     .differential_speed = 0.0f};
-
-as5600_t encoderA, encoderB;
 
 void gpio_input_init(gpio_num_t pin)
 {
@@ -126,6 +133,9 @@ void pid_loop_task(void *param)
         if (xSemaphoreTake(pid_semaphore, portMAX_DELAY) == pdTRUE)
         {
             int64_t loop_start_us = esp_timer_get_time();
+
+            pid_position_ctrl.differential += pid_speed_ctrl.differential * dt_s;
+            pid_position_ctrl.common += pid_speed_ctrl.common * dt_s;
 
             as5600_update(&encoderA);
             as5600_update(&encoderB);
@@ -190,6 +200,7 @@ void pid_loop_task(void *param)
 void app_main(void)
 {
     pid_semaphore = xSemaphoreCreateBinary();
+    homing_semaphore = xSemaphoreCreateBinary();
     init_pid_timer();
 
     esp_err_t ret = nvs_flash_init();
@@ -240,5 +251,18 @@ void app_main(void)
         NULL,
         1);
 
-    home(&pid_position_ctrl, &encoderA, &encoderB);
+    homing_params.homing_semaphore = homing_semaphore;
+    homing_params.pid_position_ctrl = &pid_position_ctrl;
+    homing_params.pid_speed_ctrl = &pid_speed_ctrl;
+    homing_params.encoderA = &encoderA;
+    homing_params.encoderB = &encoderB;
+
+    xTaskCreatePinnedToCore(
+        homing_task,
+        "homing_task",
+        4096,
+        &homing_params,
+        5,
+        NULL,
+        1);
 }

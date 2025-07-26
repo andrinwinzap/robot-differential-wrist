@@ -3,7 +3,9 @@
 
 #define ENDSTOP_A_PIN GPIO_NUM_11
 #define ENDSTOP_B_PIN GPIO_NUM_8
-#define HOMING_SPEED 1.5 // rad/s
+#define COARSE_HOMING_SPEED 1.5 // rad/s
+#define FINE_HOMING_SPEED 0.15  // rad/s
+#define POSITION_TOLERANCE 1.0e-1
 
 #define I2C_MASTER_NUM_1 I2C_NUM_0
 #define I2C_MASTER_SDA_IO_1 10
@@ -18,7 +20,7 @@
 #define COMMON_GEAR_RATIO
 
 #define PID_LOOP_FREQUENCY 1000
-#define PID_LOG_FREQUENCY_HZ 10
+#define PID_LOG_FREQUENCY_HZ 1
 #define PID_FREQ_ALPHA 0.9f
 #define PID_LOOP_TIME_ALPHA 0.9f
 
@@ -32,5 +34,11 @@ typedef struct
     float differential;
     float common;
 } pid_position_ctrl_t;
+
+typedef struct
+{
+    float differential;
+    float common;
+} pid_speed_ctrl_t;
 
 #endif // CONFIG_H
