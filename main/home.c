@@ -85,6 +85,9 @@ void homing_task(void *pvParams)
             {
                 if (reached_target_pos(&params->wrist->axis_a))
                 {
+                    float pos = as5600_get_position(&params->wrist->axis_b.encoder);
+                    dir = (pos < 0) - (pos > 0);
+                    params->wrist->axis_b.pos_ctrl = -dir * 0.2f;
                     state = MOVING_NEXT_TO_B_END_SWITCH;
                 }
                 break;
@@ -94,11 +97,7 @@ void homing_task(void *pvParams)
             {
                 if (reached_target_pos(&params->wrist->axis_b))
                 {
-                    float pos = as5600_get_position(&params->wrist->axis_b.encoder);
-                    dir = (pos < 0) - (pos > 0);
-                    params->wrist->axis_b.pos_ctrl = -dir * 0.5f;
-
-                    params->wrist->axis_b.speed_ctrl = COARSE_HOMING_SPEED * dir;
+                    params->wrist->axis_b.speed_ctrl = FINE_HOMING_SPEED * dir;
                     state = FINDING_B_AXIS_RISING_EDGE;
                 }
                 break;
