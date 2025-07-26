@@ -9,6 +9,7 @@
 #include "diff_speed_ctrl.h"
 #include "pid.h"
 #include "nvs_flash.h"
+#include "esp_timer.h"
 
 #define TAG "AS5600_DUAL"
 
@@ -27,7 +28,8 @@
 
 #define COMMON_GEAR_RATIO
 
-#define PID_LOOP_FREQUENCY 10
+#define PID_LOOP_FREQUENCY 100
+#define PID_FREQ_ALPHA 0.1f
 #define HOMING_SPEED 1.5 // rad/s
 
 #define CTRL_SIGNAL_THRESHOLD 0.03f
@@ -88,6 +90,8 @@ void pid_loop_task(void *param)
     float dt_s = 1.0f / PID_LOOP_FREQUENCY;
     float dt_ms = 1000 / PID_LOOP_FREQUENCY;
 
+    double measured_pid_frequency = 0.0;
+
     for (;;)
     {
         as5600_update(&encoderA);
@@ -107,11 +111,23 @@ void pid_loop_task(void *param)
             common_control_signal = 0.0f;
         set_common_speed(&speed_controller, common_control_signal);
 
-        ESP_LOGI("PID_LOOP",
-                 "Common: target=%.2f, measured=%.2f, ctrl=%.2f | "
-                 "Diff: target=%.2f, measured=%.2f, ctrl=%.2f",
-                 common_position_target, common_position_measured, common_control_signal,
-                 differential_position_target, differential_position_measured, differential_control_signal);
+        int64_t now_us = esp_timer_get_time();
+        static int64_t last_us = 0;
+
+        if (last_us > 0)
+        {
+            float loop_time_ms = (now_us - last_us) / 1000.0f;
+            float current_frequency = 1000.0f / loop_time_ms;
+            measured_pid_frequency = PID_FREQ_ALPHA * current_frequency + (1.0f - PID_FREQ_ALPHA) * measured_pid_frequency;
+        }
+        last_us = now_us;
+
+        static int64_t last_log_us = 0;
+        if ((now_us - last_log_us) >= 1000000) // 1 second
+        {
+            ESP_LOGI(TAG, "PID Loop Frequency: %.2f Hz", measured_pid_frequency);
+            last_log_us = now_us;
+        }
 
         vTaskDelay(pdMS_TO_TICKS(dt_ms));
     }
@@ -138,17 +154,17 @@ void app_main(void)
     tb6612_motor_init(&motor1, GPIO_NUM_4, GPIO_NUM_5, GPIO_NUM_6, MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A);
     tb6612_motor_init(&motor2, GPIO_NUM_12, GPIO_NUM_13, GPIO_NUM_14, MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_A);
 
-    pid_init(&pidA, 3.0f, 0.0f, 0.0f, 0.0f);
-    pid_init(&pidB, 3.0f, 0.0f, 0.0f, 0.0f);
+    pid_init(&pidA, 10.0f, 0.0f, 0.0f, 0.0f);
+    pid_init(&pidB, 10.0f, 0.0f, 0.0f, 0.0f);
 
     bool ok1 = as5600_init(&encoderA, I2C_MASTER_NUM_0, AS5600_DEFAULT_ADDR, 0.1f, 0.01f, 1.0f, -1);
     bool ok2 = as5600_init(&encoderB, I2C_MASTER_NUM_1, AS5600_DEFAULT_ADDR, 0.1f, 0.01f, 1.0f, -1);
 
-    // if (!ok1 || !ok2)
-    // {
-    //     ESP_LOGE(TAG, "Failed to initialize one or both encoders (ok1=%d, ok2=%d)", ok1, ok2);
-    //     return;
-    // }
+    if (!ok1 || !ok2)
+    {
+        ESP_LOGE(TAG, "Failed to initialize one or both encoders (ok1=%d, ok2=%d)", ok1, ok2);
+        return;
+    }
 
     ESP_LOGI(TAG, "Encoders initialized on I2C_NUM_0 and I2C_NUM_1.");
 
