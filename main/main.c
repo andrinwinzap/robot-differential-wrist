@@ -11,7 +11,7 @@
 #include "nvs_flash.h"
 #include "esp_timer.h"
 #include "driver/timer.h"
-#include "freertos/semphr.h" c
+#include "freertos/semphr.h"
 
 #define TAG "AS5600_DUAL"
 
@@ -30,11 +30,11 @@
 
 #define COMMON_GEAR_RATIO
 
-#define PID_LOOP_FREQUENCY 1500
-#define PID_FREQ_ALPHA 0.1f
+#define PID_LOOP_FREQUENCY 1000
+#define PID_FREQ_ALPHA 0.9f
 #define HOMING_SPEED 1.5 // rad/s
 
-#define CTRL_SIGNAL_THRESHOLD 0.03f
+#define CTRL_SIGNAL_THRESHOLD 0.1f
 
 #define TIMER_GROUP TIMER_GROUP_0
 #define TIMER_IDX TIMER_0
@@ -132,28 +132,48 @@ void pid_loop_task(void *param)
     int64_t last_us = 0;
     int64_t last_log_us = 0;
 
+    static float prev_position_a = 0.0f;
+    static float prev_position_b = 0.0f;
+
+    unsigned long change_count_a = 0;
+    unsigned long change_count_b = 0;
+    unsigned long total_updates_a = 0;
+    unsigned long total_updates_b = 0;
+
+    const float POSITION_EPSILON = 1e-6f;
+
     for (;;)
     {
-        // Wait for hardware timer to give semaphore
         if (xSemaphoreTake(pid_semaphore, portMAX_DELAY) == pdTRUE)
         {
             as5600_update(&encoderA);
             as5600_update(&encoderB);
 
-            // Differential
+            // Differential (A)
             float differential_position_measured = as5600_get_position(&encoderA);
+            total_updates_a++;
+            if (fabsf(differential_position_measured - prev_position_a) >= POSITION_EPSILON)
+                change_count_a++;
+            prev_position_a = differential_position_measured;
+
             float differential_control_signal = pid_update(&pidA, differential_position_target, differential_position_measured, dt_s);
             if (fabsf(differential_control_signal) < CTRL_SIGNAL_THRESHOLD)
                 differential_control_signal = 0.0f;
             set_differential_speed(&speed_controller, differential_control_signal);
 
-            // Common
+            // Common (B)
             float common_position_measured = as5600_get_position(&encoderB);
+            total_updates_b++;
+            if (fabsf(common_position_measured - prev_position_b) >= POSITION_EPSILON)
+                change_count_b++;
+            prev_position_b = common_position_measured;
+
             float common_control_signal = pid_update(&pidB, common_position_target, common_position_measured, dt_s);
             if (fabsf(common_control_signal) < CTRL_SIGNAL_THRESHOLD)
                 common_control_signal = 0.0f;
             set_common_speed(&speed_controller, common_control_signal);
 
+            // Frequency estimation
             int64_t now_us = esp_timer_get_time();
             if (last_us > 0)
             {
@@ -163,9 +183,22 @@ void pid_loop_task(void *param)
             }
             last_us = now_us;
 
+            // Log once per second
             if ((now_us - last_log_us) >= 1000000)
             {
-                ESP_LOGI(TAG, "PID Loop Frequency: %.2f Hz", measured_pid_frequency);
+                float change_percent_a = total_updates_a ? (100.0f * change_count_a / total_updates_a) : 0.0f;
+                float change_percent_b = total_updates_b ? (100.0f * change_count_b / total_updates_b) : 0.0f;
+
+                ESP_LOGI(TAG, "PID Freq: %.2f Hz | A change: %lu/%lu (%.2f%%) | B change: %lu/%lu (%.2f%%)",
+                         measured_pid_frequency,
+                         change_count_a, total_updates_a, change_percent_a,
+                         change_count_b, total_updates_b, change_percent_b);
+
+                // Reset counters after logging
+                change_count_a = 0;
+                change_count_b = 0;
+                total_updates_a = 0;
+                total_updates_b = 0;
                 last_log_us = now_us;
             }
         }
@@ -197,11 +230,11 @@ void app_main(void)
     tb6612_motor_init(&motor1, GPIO_NUM_4, GPIO_NUM_5, GPIO_NUM_6, MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A);
     tb6612_motor_init(&motor2, GPIO_NUM_12, GPIO_NUM_13, GPIO_NUM_14, MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_A);
 
-    pid_init(&pidA, 10.0f, 0.0f, 0.0f, 0.0f);
-    pid_init(&pidB, 10.0f, 0.0f, 0.0f, 0.0f);
+    pid_init(&pidA, 30.0f, 0.0f, 0.0f, 0.0f);
+    pid_init(&pidB, 30.0f, 0.0f, 0.0f, 0.0f);
 
-    bool ok1 = as5600_init(&encoderA, I2C_MASTER_NUM_0, AS5600_DEFAULT_ADDR, 0.1f, 0.01f, 1.0f, -1);
-    bool ok2 = as5600_init(&encoderB, I2C_MASTER_NUM_1, AS5600_DEFAULT_ADDR, 0.1f, 0.01f, 1.0f, -1);
+    bool ok1 = as5600_init(&encoderA, I2C_MASTER_NUM_0, AS5600_DEFAULT_ADDR, 1.0f, 0.0f, 1.0f, -1);
+    bool ok2 = as5600_init(&encoderB, I2C_MASTER_NUM_1, AS5600_DEFAULT_ADDR, 1.0f, 0.0f, 1.0f, -1);
 
     if (!ok1 || !ok2)
     {
@@ -237,7 +270,7 @@ void app_main(void)
         ;
 
     common_position_target = 0.0f;
-    while (fabs(as5600_get_position(&encoderB) > 0.1))
+    while (fabs(as5600_get_position(&encoderB)) > 0.1)
         ;
 
     while (gpio_get_level(ENDSTOP_B_PIN))
