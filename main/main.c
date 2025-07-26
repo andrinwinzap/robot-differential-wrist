@@ -12,42 +12,17 @@
 #include "esp_timer.h"
 #include "driver/timer.h"
 #include "freertos/semphr.h"
+#include "home.h"
+#include "config.h"
 
 #define TAG "AS5600_DUAL"
-
-#define I2C_MASTER_NUM_1 I2C_NUM_0
-#define I2C_MASTER_SDA_IO_1 10
-#define I2C_MASTER_SCL_IO_1 9
-
-#define I2C_MASTER_NUM_0 I2C_NUM_1
-#define I2C_MASTER_SDA_IO_0 18
-#define I2C_MASTER_SCL_IO_0 17
-
-#define I2C_FREQ_HZ 400000
-
-#define ENDSTOP_A_PIN GPIO_NUM_11
-#define ENDSTOP_B_PIN GPIO_NUM_8
-
-#define COMMON_GEAR_RATIO
-
-#define PID_LOOP_FREQUENCY 1000
-#define PID_LOG_FREQUENCY_HZ 10
-#define PID_FREQ_ALPHA 0.9f
-#define PID_LOOP_TIME_ALPHA 0.9f
-#define HOMING_SPEED 1.5 // rad/s
-
-#define CTRL_SIGNAL_THRESHOLD 0.1f
-
-#define TIMER_GROUP TIMER_GROUP_0
-#define TIMER_IDX TIMER_0
 
 SemaphoreHandle_t pid_semaphore;
 
 tb6612_motor_t motor1, motor2;
 pid_controller_t pidA, pidB;
 
-float common_position_target = 0.0f;
-float differential_position_target = 0.0f;
+pid_position_ctrl_t pid_position_ctrl;
 
 void IRAM_ATTR timer_isr(void *arg)
 {
@@ -162,7 +137,7 @@ void pid_loop_task(void *param)
                 change_count_a++;
             prev_position_a = differential_position_measured;
 
-            float differential_control_signal = pid_update(&pidA, differential_position_target, differential_position_measured, dt_s);
+            float differential_control_signal = pid_update(&pidA, pid_position_ctrl.differential, differential_position_measured, dt_s);
             if (fabsf(differential_control_signal) < CTRL_SIGNAL_THRESHOLD)
                 differential_control_signal = 0.0f;
             set_differential_speed(&speed_controller, differential_control_signal);
@@ -174,7 +149,7 @@ void pid_loop_task(void *param)
                 change_count_b++;
             prev_position_b = common_position_measured;
 
-            float common_control_signal = pid_update(&pidB, common_position_target, common_position_measured, dt_s);
+            float common_control_signal = pid_update(&pidB, pid_position_ctrl.common, common_position_measured, dt_s);
             if (fabsf(common_control_signal) < CTRL_SIGNAL_THRESHOLD)
                 common_control_signal = 0.0f;
             set_common_speed(&speed_controller, common_control_signal);
@@ -236,6 +211,9 @@ void app_main(void)
     tb6612_motor_init(&motor1, GPIO_NUM_4, GPIO_NUM_5, GPIO_NUM_6, MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A);
     tb6612_motor_init(&motor2, GPIO_NUM_12, GPIO_NUM_13, GPIO_NUM_14, MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_A);
 
+    pid_position_ctrl.differential = 0.0f;
+    pid_position_ctrl.common = 0.0f;
+
     pid_init(&pidA, 30.0f, 0.0f, 0.0f, 0.0f);
     pid_init(&pidB, 30.0f, 0.0f, 0.0f, 0.0f);
 
@@ -250,8 +228,8 @@ void app_main(void)
 
     ESP_LOGI(TAG, "Encoders initialized on I2C_NUM_0 and I2C_NUM_1.");
 
-    differential_position_target = as5600_get_position(&encoderA);
-    common_position_target = as5600_get_position(&encoderB);
+    pid_position_ctrl.differential = as5600_get_position(&encoderA);
+    pid_position_ctrl.common = as5600_get_position(&encoderB);
 
     xTaskCreatePinnedToCore(
         pid_loop_task,
@@ -262,30 +240,5 @@ void app_main(void)
         NULL,
         1);
 
-    while (!gpio_get_level(ENDSTOP_A_PIN))
-    {
-        differential_position_target += HOMING_SPEED * 0.01;
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
-    as5600_set_position(&encoderA, M_PI / 2.0f);
-    differential_position_target = -M_PI / 2.0f;
-
-    ESP_LOGI(TAG, "AXIS A HOMED");
-
-    while (fabs(as5600_get_position(&encoderA) - differential_position_target) > 0.1)
-        ;
-
-    common_position_target = 0.0f;
-    while (fabs(as5600_get_position(&encoderB)) > 0.1)
-        ;
-
-    while (gpio_get_level(ENDSTOP_B_PIN))
-    {
-        common_position_target += HOMING_SPEED * 0.01;
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
-    as5600_set_position(&encoderB, 0.0f);
-    common_position_target = 0.5f;
-
-    differential_position_target = 0.0f;
+    home(&pid_position_ctrl, &encoderA, &encoderB);
 }
