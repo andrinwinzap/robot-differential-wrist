@@ -53,7 +53,7 @@ void tb6612_motor_set_speed(const tb6612_motor_t *motor, float speed)
     }
     else
     {
-        float min_duty = 0.05f; // Minimum effective duty
+        float min_duty = 0.0f; // Minimum effective duty
         float duty = (min_duty + (1.0f - min_duty) * fabsf(speed)) * 100.0f;
 
         if (speed > 0.0f)
