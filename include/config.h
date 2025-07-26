@@ -2,10 +2,13 @@
 #define CONFIG_H
 
 #define ENDSTOP_A_PIN GPIO_NUM_11
+#define ENDSTOP_A_POSITION M_PI / 2.0f - 0.05
 #define ENDSTOP_B_PIN GPIO_NUM_8
+#define ENDSTOP_B_POSITION 0
+
 #define COARSE_HOMING_SPEED 1.5 // rad/s
-#define FINE_HOMING_SPEED 0.15  // rad/s
-#define POSITION_TOLERANCE 1.0e-1
+#define FINE_HOMING_SPEED 0.5   // rad/s
+#define POSITION_TOLERANCE 1.0e-3
 
 #define I2C_MASTER_NUM_1 I2C_NUM_0
 #define I2C_MASTER_SDA_IO_1 10

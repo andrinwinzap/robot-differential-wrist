@@ -74,7 +74,7 @@ void homing_task(void *pvParams)
                 if (a_axis_endstop())
                 {
                     params->wrist->axis_a.speed_ctrl = 0.0;
-                    as5600_set_position(&params->wrist->axis_a.encoder, M_PI / 2.0f);
+                    as5600_set_position(&params->wrist->axis_a.encoder, ENDSTOP_A_POSITION);
                     params->wrist->axis_a.pos_ctrl = -M_PI / 2.0f;
 
                     state = MOVING_TO_B_END;
