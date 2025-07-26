@@ -39,7 +39,7 @@ void homing_task(void *pvParams)
     float rising_edge;
     float falling_edge;
 
-    params->pid_speed_ctrl->differential = COARSE_HOMING_SPEED;
+    params->wrist->axis_a.speed_ctrl = COARSE_HOMING_SPEED;
     while (true)
     {
         if (xSemaphoreTake(params->homing_semaphore, portMAX_DELAY) == pdTRUE)
@@ -51,9 +51,9 @@ void homing_task(void *pvParams)
             {
                 if (a_axis_endstop())
                 {
-                    params->pid_speed_ctrl->differential = 0.0;
-                    float coarse_pos = as5600_get_position(params->encoderA);
-                    params->pid_position_ctrl->differential = coarse_pos - 0.3;
+                    params->wrist->axis_a.speed_ctrl = 0.0;
+                    float coarse_pos = as5600_get_position(&params->wrist->axis_a.encoder);
+                    params->wrist->axis_a.pos_ctrl = coarse_pos - 0.3;
 
                     state = BACKING_OFF_A_ENDSTOP;
                 }
@@ -61,9 +61,9 @@ void homing_task(void *pvParams)
             }
             case BACKING_OFF_A_ENDSTOP:
             {
-                if (reached_target(params->encoderA, params->pid_position_ctrl->differential))
+                if (reached_target(&params->wrist->axis_a.encoder, params->wrist->axis_a.pos_ctrl))
                 {
-                    params->pid_speed_ctrl->differential = FINE_HOMING_SPEED;
+                    params->wrist->axis_a.speed_ctrl = FINE_HOMING_SPEED;
 
                     state = FINDING_A_AXIS_END_FINE;
                 }
@@ -73,9 +73,9 @@ void homing_task(void *pvParams)
             {
                 if (a_axis_endstop())
                 {
-                    params->pid_speed_ctrl->differential = 0.0;
-                    as5600_set_position(params->encoderA, M_PI / 2.0f);
-                    params->pid_position_ctrl->differential = -M_PI / 2.0f;
+                    params->wrist->axis_a.speed_ctrl = 0.0;
+                    as5600_set_position(&params->wrist->axis_a.encoder, M_PI / 2.0f);
+                    params->wrist->axis_a.pos_ctrl = -M_PI / 2.0f;
 
                     state = MOVING_TO_B_END;
                 }
@@ -83,7 +83,7 @@ void homing_task(void *pvParams)
             }
             case MOVING_TO_B_END:
             {
-                if (reached_target(params->encoderA, params->pid_position_ctrl->differential))
+                if (reached_target(&params->wrist->axis_a.encoder, params->wrist->axis_a.pos_ctrl))
                 {
                     state = MOVING_NEXT_TO_B_END_SWITCH;
                 }
@@ -92,13 +92,13 @@ void homing_task(void *pvParams)
 
             case MOVING_NEXT_TO_B_END_SWITCH:
             {
-                if (reached_target(params->encoderB, params->pid_position_ctrl->common))
+                if (reached_target(&params->wrist->axis_b.encoder, params->wrist->axis_b.pos_ctrl))
                 {
-                    float pos = as5600_get_position(params->encoderB);
+                    float pos = as5600_get_position(&params->wrist->axis_b.encoder);
                     dir = (pos < 0) - (pos > 0);
-                    params->pid_position_ctrl->common = -dir * 0.2f;
+                    params->wrist->axis_b.pos_ctrl = -dir * 0.2f;
 
-                    params->pid_speed_ctrl->common = COARSE_HOMING_SPEED * dir;
+                    params->wrist->axis_b.speed_ctrl = COARSE_HOMING_SPEED * dir;
                     state = FINDING_B_AXIS_RISING_EDGE;
                 }
                 break;
@@ -108,8 +108,8 @@ void homing_task(void *pvParams)
             {
                 if (b_axis_endstop())
                 {
-                    rising_edge = as5600_get_position(params->encoderB);
-                    params->pid_speed_ctrl->common = FINE_HOMING_SPEED * dir;
+                    rising_edge = as5600_get_position(&params->wrist->axis_b.encoder);
+                    params->wrist->axis_b.speed_ctrl = FINE_HOMING_SPEED * dir;
                     ESP_LOGI(TAG, "RISING EDGE: %.4f", rising_edge);
 
                     state = FINDING_B_AXIS_FALLING_EDGE;
@@ -122,15 +122,15 @@ void homing_task(void *pvParams)
             {
                 if (!b_axis_endstop())
                 {
-                    params->pid_speed_ctrl->common = 0.0;
-                    falling_edge = as5600_get_position(params->encoderB);
+                    params->wrist->axis_b.speed_ctrl = 0.0;
+                    falling_edge = as5600_get_position(&params->wrist->axis_b.encoder);
                     ESP_LOGI(TAG, "Falling EDGE: %.4f", falling_edge);
 
                     float calibrated_position = (falling_edge - rising_edge) / 2.0f;
-                    as5600_set_position(params->encoderB, calibrated_position);
+                    as5600_set_position(&params->wrist->axis_b.encoder, calibrated_position);
 
-                    params->pid_position_ctrl->common = 0.5f;
-                    params->pid_position_ctrl->differential = 0.0f;
+                    params->wrist->axis_b.pos_ctrl = 0.5f;
+                    params->wrist->axis_a.pos_ctrl = 0.0f;
 
                     state = MOVING_TO_ZERO;
                 }
@@ -139,7 +139,7 @@ void homing_task(void *pvParams)
 
             case MOVING_TO_ZERO:
             {
-                if (reached_target(params->encoderA, params->pid_position_ctrl->differential) && reached_target(params->encoderB, params->pid_position_ctrl->common))
+                if (reached_target(&params->wrist->axis_a.encoder, params->wrist->axis_a.pos_ctrl) && reached_target(&params->wrist->axis_b.encoder, params->wrist->axis_b.pos_ctrl))
                 {
                     state = FINISHED;
                 }

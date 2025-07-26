@@ -29,16 +29,4 @@
 #define TIMER_GROUP TIMER_GROUP_0
 #define TIMER_IDX TIMER_0
 
-typedef struct
-{
-    float differential;
-    float common;
-} pid_position_ctrl_t;
-
-typedef struct
-{
-    float differential;
-    float common;
-} pid_speed_ctrl_t;
-
 #endif // CONFIG_H

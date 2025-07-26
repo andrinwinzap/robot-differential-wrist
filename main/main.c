@@ -14,18 +14,14 @@
 #include "freertos/semphr.h"
 #include "home.h"
 #include "config.h"
+#include "wrist.h"
 
 #define TAG "AS5600_DUAL"
 
 SemaphoreHandle_t pid_semaphore;
 SemaphoreHandle_t homing_semaphore;
 
-tb6612_motor_t motor1, motor2;
-pid_controller_t pidA, pidB;
-
-pid_position_ctrl_t pid_position_ctrl;
-pid_speed_ctrl_t pid_speed_ctrl;
-as5600_t encoderA, encoderB;
+wrist_t wrist;
 
 static homing_params_t homing_params;
 
@@ -45,7 +41,7 @@ void IRAM_ATTR timer_isr(void *arg)
     }
 }
 
-void init_pid_timer()
+void init_control_timer()
 {
     timer_config_t config = {
         .divider = 80, // 1 tick = 1 microsecond (assuming 80 MHz APB clock)
@@ -67,20 +63,13 @@ void init_pid_timer()
 
 void motor1_cb(float speed)
 {
-    tb6612_motor_set_speed(&motor1, speed);
+    tb6612_motor_set_speed(&wrist.motor_1, speed);
 }
 
 void motor2_cb(float speed)
 {
-    tb6612_motor_set_speed(&motor2, speed);
+    tb6612_motor_set_speed(&wrist.motor_2, speed);
 }
-
-diff_speed_ctrl_t speed_controller = {
-    .cb1 = &motor1_cb,
-    .cb2 = &motor2_cb,
-    .gear_ratio = 20.0f / 29.0f,
-    .common_speed = 0.0f,
-    .differential_speed = 0.0f};
 
 void gpio_input_init(gpio_num_t pin)
 {
@@ -134,35 +123,35 @@ void pid_loop_task(void *param)
         {
             int64_t loop_start_us = esp_timer_get_time();
 
-            pid_position_ctrl.differential += pid_speed_ctrl.differential * dt_s;
-            pid_position_ctrl.common += pid_speed_ctrl.common * dt_s;
+            wrist.axis_a.pos_ctrl += wrist.axis_a.speed_ctrl * dt_s;
+            wrist.axis_b.pos_ctrl += wrist.axis_b.speed_ctrl * dt_s;
 
-            as5600_update(&encoderA);
-            as5600_update(&encoderB);
+            as5600_update(&wrist.axis_a.encoder);
+            as5600_update(&wrist.axis_b.encoder);
 
             // Differential (A)
-            float differential_position_measured = as5600_get_position(&encoderA);
+            float differential_position_measured = as5600_get_position(&wrist.axis_a.encoder);
             total_updates_a++;
             if (fabsf(differential_position_measured - prev_position_a) >= POSITION_EPSILON)
                 change_count_a++;
             prev_position_a = differential_position_measured;
 
-            float differential_control_signal = pid_update(&pidA, pid_position_ctrl.differential, differential_position_measured, dt_s);
+            float differential_control_signal = pid_update(&wrist.axis_a.pid, wrist.axis_a.pos_ctrl, differential_position_measured, dt_s);
             if (fabsf(differential_control_signal) < CTRL_SIGNAL_THRESHOLD)
                 differential_control_signal = 0.0f;
-            set_differential_speed(&speed_controller, differential_control_signal);
+            set_differential_speed(&wrist.diff_speed_ctrl, differential_control_signal);
 
             // Common (B)
-            float common_position_measured = as5600_get_position(&encoderB);
+            float common_position_measured = as5600_get_position(&wrist.axis_b.encoder);
             total_updates_b++;
             if (fabsf(common_position_measured - prev_position_b) >= POSITION_EPSILON)
                 change_count_b++;
             prev_position_b = common_position_measured;
 
-            float common_control_signal = pid_update(&pidB, pid_position_ctrl.common, common_position_measured, dt_s);
+            float common_control_signal = pid_update(&wrist.axis_b.pid, wrist.axis_b.pos_ctrl, common_position_measured, dt_s);
             if (fabsf(common_control_signal) < CTRL_SIGNAL_THRESHOLD)
                 common_control_signal = 0.0f;
-            set_common_speed(&speed_controller, common_control_signal);
+            set_common_speed(&wrist.diff_speed_ctrl, common_control_signal);
 
             int64_t now_us = esp_timer_get_time();
             float loop_time_us = (float)(now_us - loop_start_us); // Microseconds
@@ -201,7 +190,7 @@ void app_main(void)
 {
     pid_semaphore = xSemaphoreCreateBinary();
     homing_semaphore = xSemaphoreCreateBinary();
-    init_pid_timer();
+    init_control_timer();
 
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
@@ -219,17 +208,26 @@ void app_main(void)
     i2c_bus_init(I2C_MASTER_NUM_0, I2C_MASTER_SDA_IO_0, I2C_MASTER_SCL_IO_0);
     i2c_bus_init(I2C_MASTER_NUM_1, I2C_MASTER_SDA_IO_1, I2C_MASTER_SCL_IO_1);
 
-    tb6612_motor_init(&motor1, GPIO_NUM_4, GPIO_NUM_5, GPIO_NUM_6, MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A);
-    tb6612_motor_init(&motor2, GPIO_NUM_12, GPIO_NUM_13, GPIO_NUM_14, MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_A);
+    tb6612_motor_init(&wrist.motor_1, GPIO_NUM_4, GPIO_NUM_5, GPIO_NUM_6, MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A);
+    tb6612_motor_init(&wrist.motor_2, GPIO_NUM_12, GPIO_NUM_13, GPIO_NUM_14, MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_A);
 
-    pid_position_ctrl.differential = 0.0f;
-    pid_position_ctrl.common = 0.0f;
+    wrist.axis_a.pos_ctrl = 0.0f;
+    wrist.axis_a.speed_ctrl = 0.0f;
 
-    pid_init(&pidA, 30.0f, 0.0f, 0.0f, 0.0f);
-    pid_init(&pidB, 30.0f, 0.0f, 0.0f, 0.0f);
+    wrist.axis_b.pos_ctrl = 0.0f;
+    wrist.axis_b.speed_ctrl = 0.0f;
 
-    bool ok1 = as5600_init(&encoderA, I2C_MASTER_NUM_0, AS5600_DEFAULT_ADDR, 1.0f, 0.0f, 1.0f, -1);
-    bool ok2 = as5600_init(&encoderB, I2C_MASTER_NUM_1, AS5600_DEFAULT_ADDR, 1.0f, 0.0f, 1.0f, -1);
+    wrist.diff_speed_ctrl.cb1 = &motor1_cb;
+    wrist.diff_speed_ctrl.cb2 = &motor2_cb;
+    wrist.diff_speed_ctrl.gear_ratio = 20.0f / 29.0f;
+    wrist.diff_speed_ctrl.common_speed = 0.0f;
+    wrist.diff_speed_ctrl.differential_speed = 0.0f;
+
+    pid_init(&wrist.axis_a.pid, 30.0f, 0.0f, 0.0f, 0.0f);
+    pid_init(&wrist.axis_b.pid, 30.0f, 0.0f, 0.0f, 0.0f);
+
+    bool ok1 = as5600_init(&wrist.axis_a.encoder, I2C_MASTER_NUM_0, AS5600_DEFAULT_ADDR, 1.0f, 0.0f, 1.0f, -1);
+    bool ok2 = as5600_init(&wrist.axis_b.encoder, I2C_MASTER_NUM_1, AS5600_DEFAULT_ADDR, 1.0f, 0.0f, 1.0f, -1);
 
     if (!ok1 || !ok2)
     {
@@ -239,8 +237,8 @@ void app_main(void)
 
     ESP_LOGI(TAG, "Encoders initialized on I2C_NUM_0 and I2C_NUM_1.");
 
-    pid_position_ctrl.differential = as5600_get_position(&encoderA);
-    pid_position_ctrl.common = as5600_get_position(&encoderB);
+    wrist.axis_a.pos_ctrl = as5600_get_position(&wrist.axis_a.encoder);
+    wrist.axis_b.pos_ctrl = as5600_get_position(&wrist.axis_b.encoder);
 
     xTaskCreatePinnedToCore(
         pid_loop_task,
@@ -252,10 +250,7 @@ void app_main(void)
         1);
 
     homing_params.homing_semaphore = homing_semaphore;
-    homing_params.pid_position_ctrl = &pid_position_ctrl;
-    homing_params.pid_speed_ctrl = &pid_speed_ctrl;
-    homing_params.encoderA = &encoderA;
-    homing_params.encoderB = &encoderB;
+    homing_params.wrist = &wrist;
 
     xTaskCreatePinnedToCore(
         homing_task,
