@@ -14,9 +14,9 @@ bool b_axis_endstop()
     return !gpio_get_level(ENDSTOP_B_PIN);
 }
 
-bool reached_target(as5600_t *encoder, float target)
+bool reached_target_pos(axis_t *axis)
 {
-    return (fabs(as5600_get_position(encoder) - target) < POSITION_TOLERANCE);
+    return (fabs(as5600_get_position(&axis->encoder) - axis->pos_ctrl) < POSITION_TOLERANCE);
 }
 
 void homing_task(void *pvParams)
@@ -61,7 +61,7 @@ void homing_task(void *pvParams)
             }
             case BACKING_OFF_A_ENDSTOP:
             {
-                if (reached_target(&params->wrist->axis_a.encoder, params->wrist->axis_a.pos_ctrl))
+                if (reached_target_pos(&params->wrist->axis_a))
                 {
                     params->wrist->axis_a.speed_ctrl = FINE_HOMING_SPEED;
 
@@ -83,7 +83,7 @@ void homing_task(void *pvParams)
             }
             case MOVING_TO_B_END:
             {
-                if (reached_target(&params->wrist->axis_a.encoder, params->wrist->axis_a.pos_ctrl))
+                if (reached_target_pos(&params->wrist->axis_a))
                 {
                     state = MOVING_NEXT_TO_B_END_SWITCH;
                 }
@@ -92,11 +92,11 @@ void homing_task(void *pvParams)
 
             case MOVING_NEXT_TO_B_END_SWITCH:
             {
-                if (reached_target(&params->wrist->axis_b.encoder, params->wrist->axis_b.pos_ctrl))
+                if (reached_target_pos(&params->wrist->axis_b))
                 {
                     float pos = as5600_get_position(&params->wrist->axis_b.encoder);
                     dir = (pos < 0) - (pos > 0);
-                    params->wrist->axis_b.pos_ctrl = -dir * 0.2f;
+                    params->wrist->axis_b.pos_ctrl = -dir * 0.5f;
 
                     params->wrist->axis_b.speed_ctrl = COARSE_HOMING_SPEED * dir;
                     state = FINDING_B_AXIS_RISING_EDGE;
@@ -139,7 +139,7 @@ void homing_task(void *pvParams)
 
             case MOVING_TO_ZERO:
             {
-                if (reached_target(&params->wrist->axis_a.encoder, params->wrist->axis_a.pos_ctrl) && reached_target(&params->wrist->axis_b.encoder, params->wrist->axis_b.pos_ctrl))
+                if ((reached_target_pos(&params->wrist->axis_a)) && (reached_target_pos(&params->wrist->axis_b)))
                 {
                     state = FINISHED;
                 }

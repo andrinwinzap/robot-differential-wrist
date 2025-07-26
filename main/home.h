@@ -1,7 +1,6 @@
 #ifndef HOME_H
 #define HOME_H
 
-#include "as5600.h"
 #include "config.h"
 #include "wrist.h"
 #include "freertos/semphr.h"
