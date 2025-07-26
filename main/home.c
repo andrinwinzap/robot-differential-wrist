@@ -28,7 +28,36 @@ void home(pid_position_ctrl_t *pid_position_ctrl, as5600_t *encoderA, as5600_t *
         pid_position_ctrl->common += HOMING_SPEED * 0.01;
         vTaskDelay(pdMS_TO_TICKS(10));
     }
-    as5600_set_position(encoderB, 0.0f);
+
+    while (!gpio_get_level(ENDSTOP_B_PIN))
+    {
+        pid_position_ctrl->common -= HOMING_SPEED * 0.01;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    float cw_edge = as5600_get_position(encoderB);
+
+    while (gpio_get_level(ENDSTOP_B_PIN))
+    {
+        pid_position_ctrl->common += HOMING_SPEED * 0.01;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    while (!gpio_get_level(ENDSTOP_B_PIN))
+    {
+        pid_position_ctrl->common -= HOMING_SPEED * 0.01;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    float ccw_edge = as5600_get_position(encoderB);
+
+    ESP_LOGI(TAG, "CCW edge detected at %.4f", ccw_edge);
+    float center = (ccw_edge - cw_edge) / 2.0f;
+    ESP_LOGI(TAG, "Center calculated at %.4f. Returning to center...", center);
+
+    as5600_set_position(encoderB, center);
+    float target = 0.0f;
+    pid_position_ctrl->common = target;
+    while (fabs(target - as5600_get_position(encoderB)) > 0.1)
+        ;
+
     pid_position_ctrl->common = 0.5f;
 
     pid_position_ctrl->differential = 0.0f;
