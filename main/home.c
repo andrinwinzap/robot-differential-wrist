@@ -44,6 +44,8 @@ void homing_task(void *pvParams)
 
     params->wrist->axis_a.speed_ctrl = COARSE_HOMING_SPEED;
 
+    ESP_LOGI(TAG, "Position Tolerance: %f", POSITION_TOLERANCE);
+
     while (true)
     {
         if (xSemaphoreTake(params->homing_semaphore, portMAX_DELAY) == pdTRUE)
@@ -80,7 +82,7 @@ void homing_task(void *pvParams)
                 {
                     params->wrist->axis_a.speed_ctrl = 0.0;
                     as5600_set_position(&params->wrist->axis_a.encoder, ENDSTOP_A_POSITION);
-                    params->wrist->axis_a.pos_ctrl = M_PI / 2 - 0.04;
+                    params->wrist->axis_a.pos_ctrl = A_AXIS_MAX;
                     ESP_LOGI(TAG, "A endstop (fine) hit, zeroed to %.4f", ENDSTOP_A_POSITION);
                     state = MOVING_TO_B_END;
                 }
@@ -91,7 +93,7 @@ void homing_task(void *pvParams)
                 {
                     float pos = as5600_get_position(&params->wrist->axis_b.encoder);
                     dir = (pos < 0) - (pos > 0);
-                    params->wrist->axis_b.pos_ctrl = -dir * 0.2f;
+                    params->wrist->axis_b.pos_ctrl = -dir * 0.2f - ENDSTOP_B_POSITION;
                     state = MOVING_NEXT_TO_B_END_SWITCH;
                 }
                 break;
@@ -120,11 +122,11 @@ void homing_task(void *pvParams)
                     falling_edge = as5600_get_position(&params->wrist->axis_b.encoder);
                     ESP_LOGI(TAG, "B falling edge at %.4f", falling_edge);
 
-                    float calibrated = (falling_edge - rising_edge) / 2.0f;
+                    float calibrated = (falling_edge - rising_edge) / 2.0f + ENDSTOP_B_POSITION;
                     as5600_set_position(&params->wrist->axis_b.encoder, calibrated);
 
-                    params->wrist->axis_b.pos_ctrl = 0.0f;
                     params->wrist->axis_a.pos_ctrl = 0.0f;
+                    params->wrist->axis_b.pos_ctrl = -0.5f;
 
                     state = MOVING_TO_ZERO;
                 }
