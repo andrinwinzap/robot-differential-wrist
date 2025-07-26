@@ -31,7 +31,9 @@
 #define COMMON_GEAR_RATIO
 
 #define PID_LOOP_FREQUENCY 1000
+#define PID_LOG_FREQUENCY_HZ 10
 #define PID_FREQ_ALPHA 0.9f
+#define PID_LOOP_TIME_ALPHA 0.9f
 #define HOMING_SPEED 1.5 // rad/s
 
 #define CTRL_SIGNAL_THRESHOLD 0.1f
@@ -127,8 +129,10 @@ void i2c_bus_init(i2c_port_t i2c_num, gpio_num_t sda, gpio_num_t scl)
 void pid_loop_task(void *param)
 {
     float dt_s = 1.0f / PID_LOOP_FREQUENCY;
+    const int64_t PID_LOG_INTERVAL_US = (int64_t)(1000000.0f / PID_LOG_FREQUENCY_HZ);
 
     double measured_pid_frequency = 0.0;
+    double measured_loop_time_us = 0.0; // Changed to microseconds
     int64_t last_us = 0;
     int64_t last_log_us = 0;
 
@@ -146,6 +150,8 @@ void pid_loop_task(void *param)
     {
         if (xSemaphoreTake(pid_semaphore, portMAX_DELAY) == pdTRUE)
         {
+            int64_t loop_start_us = esp_timer_get_time();
+
             as5600_update(&encoderA);
             as5600_update(&encoderB);
 
@@ -173,28 +179,27 @@ void pid_loop_task(void *param)
                 common_control_signal = 0.0f;
             set_common_speed(&speed_controller, common_control_signal);
 
-            // Frequency estimation
             int64_t now_us = esp_timer_get_time();
+            float loop_time_us = (float)(now_us - loop_start_us); // Microseconds
+            measured_loop_time_us = PID_LOOP_TIME_ALPHA * loop_time_us + (1.0f - PID_LOOP_TIME_ALPHA) * measured_loop_time_us;
+
             if (last_us > 0)
             {
-                float loop_time_ms = (now_us - last_us) / 1000.0f;
-                float current_frequency = 1000.0f / loop_time_ms;
+                float time_between_loops_ms = (now_us - last_us) / 1000.0f;
+                float current_frequency = 1000.0f / time_between_loops_ms;
                 measured_pid_frequency = PID_FREQ_ALPHA * current_frequency + (1.0f - PID_FREQ_ALPHA) * measured_pid_frequency;
             }
             last_us = now_us;
 
-            // Log once per second
-            if ((now_us - last_log_us) >= 1000000)
+            if ((now_us - last_log_us) >= PID_LOG_INTERVAL_US)
             {
                 float change_percent_a = total_updates_a ? (100.0f * change_count_a / total_updates_a) : 0.0f;
                 float change_percent_b = total_updates_b ? (100.0f * change_count_b / total_updates_b) : 0.0f;
 
-                ESP_LOGI(TAG, "PID Freq: %.2f Hz | A change: %lu/%lu (%.2f%%) | B change: %lu/%lu (%.2f%%)",
-                         measured_pid_frequency,
-                         change_count_a, total_updates_a, change_percent_a,
-                         change_count_b, total_updates_b, change_percent_b);
+                ESP_LOGI(TAG,
+                         "PID Freq: %.2f Hz | Loop Time: %.0f us | Encoder A change: %.2f%% | Encoder B change: %.2f%%",
+                         measured_pid_frequency, measured_loop_time_us, change_percent_a, change_percent_b);
 
-                // Reset counters after logging
                 change_count_a = 0;
                 change_count_b = 0;
                 total_updates_a = 0;
@@ -202,6 +207,7 @@ void pid_loop_task(void *param)
                 last_log_us = now_us;
             }
         }
+
         taskYIELD();
     }
 }
