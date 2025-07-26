@@ -10,6 +10,8 @@
 #include "pid.h"
 #include "nvs_flash.h"
 #include "esp_timer.h"
+#include "driver/timer.h"
+#include "freertos/semphr.h" c
 
 #define TAG "AS5600_DUAL"
 
@@ -28,17 +30,54 @@
 
 #define COMMON_GEAR_RATIO
 
-#define PID_LOOP_FREQUENCY 100
+#define PID_LOOP_FREQUENCY 1500
 #define PID_FREQ_ALPHA 0.1f
 #define HOMING_SPEED 1.5 // rad/s
 
 #define CTRL_SIGNAL_THRESHOLD 0.03f
+
+#define TIMER_GROUP TIMER_GROUP_0
+#define TIMER_IDX TIMER_0
+
+SemaphoreHandle_t pid_semaphore;
 
 tb6612_motor_t motor1, motor2;
 pid_controller_t pidA, pidB;
 
 float common_position_target = 0.0f;
 float differential_position_target = 0.0f;
+
+void IRAM_ATTR timer_isr(void *arg)
+{
+    BaseType_t high_task_wakeup = pdFALSE;
+    timer_group_clr_intr_status_in_isr(TIMER_GROUP, TIMER_IDX);
+    timer_group_enable_alarm_in_isr(TIMER_GROUP, TIMER_IDX);
+    xSemaphoreGiveFromISR(pid_semaphore, &high_task_wakeup);
+    if (high_task_wakeup)
+    {
+        portYIELD_FROM_ISR();
+    }
+}
+
+void init_pid_timer()
+{
+    timer_config_t config = {
+        .divider = 80, // 1 tick = 1 microsecond (assuming 80 MHz APB clock)
+        .counter_dir = TIMER_COUNT_UP,
+        .counter_en = TIMER_PAUSE,
+        .alarm_en = TIMER_ALARM_EN,
+        .auto_reload = true,
+    };
+    ESP_ERROR_CHECK(timer_init(TIMER_GROUP, TIMER_IDX, &config));
+
+    // Set alarm every (1.0 / PID_LOOP_FREQUENCY) seconds
+    double alarm_time_sec = 1.0 / PID_LOOP_FREQUENCY;
+    ESP_ERROR_CHECK(timer_set_counter_value(TIMER_GROUP, TIMER_IDX, 0));
+    ESP_ERROR_CHECK(timer_set_alarm_value(TIMER_GROUP, TIMER_IDX, alarm_time_sec * 1000000)); // microseconds
+    ESP_ERROR_CHECK(timer_enable_intr(TIMER_GROUP, TIMER_IDX));
+    ESP_ERROR_CHECK(timer_isr_register(TIMER_GROUP, TIMER_IDX, timer_isr, NULL, ESP_INTR_FLAG_IRAM, NULL));
+    ESP_ERROR_CHECK(timer_start(TIMER_GROUP, TIMER_IDX));
+}
 
 void motor1_cb(float speed)
 {
@@ -88,53 +127,57 @@ void i2c_bus_init(i2c_port_t i2c_num, gpio_num_t sda, gpio_num_t scl)
 void pid_loop_task(void *param)
 {
     float dt_s = 1.0f / PID_LOOP_FREQUENCY;
-    float dt_ms = 1000 / PID_LOOP_FREQUENCY;
 
     double measured_pid_frequency = 0.0;
+    int64_t last_us = 0;
+    int64_t last_log_us = 0;
 
     for (;;)
     {
-        as5600_update(&encoderA);
-        as5600_update(&encoderB);
-
-        // Differential
-        float differential_position_measured = as5600_get_position(&encoderA);
-        float differential_control_signal = pid_update(&pidA, differential_position_target, differential_position_measured, dt_s);
-        if (fabsf(differential_control_signal) < CTRL_SIGNAL_THRESHOLD)
-            differential_control_signal = 0.0f;
-        set_differential_speed(&speed_controller, differential_control_signal);
-
-        // Common
-        float common_position_measured = as5600_get_position(&encoderB);
-        float common_control_signal = pid_update(&pidB, common_position_target, common_position_measured, dt_s);
-        if (fabsf(common_control_signal) < CTRL_SIGNAL_THRESHOLD)
-            common_control_signal = 0.0f;
-        set_common_speed(&speed_controller, common_control_signal);
-
-        int64_t now_us = esp_timer_get_time();
-        static int64_t last_us = 0;
-
-        if (last_us > 0)
+        // Wait for hardware timer to give semaphore
+        if (xSemaphoreTake(pid_semaphore, portMAX_DELAY) == pdTRUE)
         {
-            float loop_time_ms = (now_us - last_us) / 1000.0f;
-            float current_frequency = 1000.0f / loop_time_ms;
-            measured_pid_frequency = PID_FREQ_ALPHA * current_frequency + (1.0f - PID_FREQ_ALPHA) * measured_pid_frequency;
-        }
-        last_us = now_us;
+            as5600_update(&encoderA);
+            as5600_update(&encoderB);
 
-        static int64_t last_log_us = 0;
-        if ((now_us - last_log_us) >= 1000000) // 1 second
-        {
-            ESP_LOGI(TAG, "PID Loop Frequency: %.2f Hz", measured_pid_frequency);
-            last_log_us = now_us;
-        }
+            // Differential
+            float differential_position_measured = as5600_get_position(&encoderA);
+            float differential_control_signal = pid_update(&pidA, differential_position_target, differential_position_measured, dt_s);
+            if (fabsf(differential_control_signal) < CTRL_SIGNAL_THRESHOLD)
+                differential_control_signal = 0.0f;
+            set_differential_speed(&speed_controller, differential_control_signal);
 
-        vTaskDelay(pdMS_TO_TICKS(dt_ms));
+            // Common
+            float common_position_measured = as5600_get_position(&encoderB);
+            float common_control_signal = pid_update(&pidB, common_position_target, common_position_measured, dt_s);
+            if (fabsf(common_control_signal) < CTRL_SIGNAL_THRESHOLD)
+                common_control_signal = 0.0f;
+            set_common_speed(&speed_controller, common_control_signal);
+
+            int64_t now_us = esp_timer_get_time();
+            if (last_us > 0)
+            {
+                float loop_time_ms = (now_us - last_us) / 1000.0f;
+                float current_frequency = 1000.0f / loop_time_ms;
+                measured_pid_frequency = PID_FREQ_ALPHA * current_frequency + (1.0f - PID_FREQ_ALPHA) * measured_pid_frequency;
+            }
+            last_us = now_us;
+
+            if ((now_us - last_log_us) >= 1000000)
+            {
+                ESP_LOGI(TAG, "PID Loop Frequency: %.2f Hz", measured_pid_frequency);
+                last_log_us = now_us;
+            }
+        }
+        taskYIELD();
     }
 }
 
 void app_main(void)
 {
+    pid_semaphore = xSemaphoreCreateBinary();
+    init_pid_timer();
+
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
     {
