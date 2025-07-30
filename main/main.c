@@ -136,7 +136,7 @@ void pid_loop_task(void *param)
                 change_count_a++;
             prev_position_a = differential_position_measured;
 
-            float differential_control_signal = pid_update(&wrist.axis_a.pid, wrist.axis_a.pos_ctrl, differential_position_measured, dt_s);
+            float differential_control_signal = pid_update(&wrist.axis_a.pid, wrist.axis_a.pos_ctrl, differential_position_measured);
             if (fabsf(differential_control_signal) < CTRL_SIGNAL_THRESHOLD)
                 differential_control_signal = 0.0f;
             set_differential_speed(&wrist.diff_speed_ctrl, differential_control_signal);
@@ -148,7 +148,7 @@ void pid_loop_task(void *param)
                 change_count_b++;
             prev_position_b = common_position_measured;
 
-            float common_control_signal = pid_update(&wrist.axis_b.pid, wrist.axis_b.pos_ctrl, common_position_measured, dt_s);
+            float common_control_signal = pid_update(&wrist.axis_b.pid, wrist.axis_b.pos_ctrl, common_position_measured);
             if (fabsf(common_control_signal) < CTRL_SIGNAL_THRESHOLD)
                 common_control_signal = 0.0f;
             set_common_speed(&wrist.diff_speed_ctrl, common_control_signal);
@@ -170,7 +170,7 @@ void pid_loop_task(void *param)
                 float change_percent_a = total_updates_a ? (100.0f * change_count_a / total_updates_a) : 0.0f;
                 float change_percent_b = total_updates_b ? (100.0f * change_count_b / total_updates_b) : 0.0f;
 
-                ESP_LOGI(TAG,
+                ESP_LOGD(TAG,
                          "PID Freq: %.2f Hz | Loop Time: %.0f us | Encoder A change: %.2f%% | Encoder B change: %.2f%%",
                          measured_pid_frequency, measured_loop_time_us, change_percent_a, change_percent_b);
 
@@ -223,8 +223,10 @@ void app_main(void)
     wrist.diff_speed_ctrl.common_speed = 0.0f;
     wrist.diff_speed_ctrl.differential_speed = 0.0f;
 
-    pid_init(&wrist.axis_a.pid, 30.0f, 0.0f, 0.0f, 0.0f);
-    pid_init(&wrist.axis_b.pid, 30.0f, 0.0f, 0.0f, 0.0f);
+    float dt = 1.0f / PID_LOOP_FREQUENCY;
+
+    pid_init(&wrist.axis_a.pid, 10.0f, 0.0f, 0.0f, dt);
+    pid_init(&wrist.axis_b.pid, 10.0f, 0.0f, 0.0f, dt);
 
     bool ok1 = as5600_init(&wrist.axis_a.encoder, I2C_MASTER_NUM_0, AS5600_DEFAULT_ADDR, 1.0f, 0.0f, 1.0f, -1);
     bool ok2 = as5600_init(&wrist.axis_b.encoder, I2C_MASTER_NUM_1, AS5600_DEFAULT_ADDR, 1.0f, 0.0f, 1.0f, -1);
