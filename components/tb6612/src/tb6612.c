@@ -47,13 +47,13 @@ void tb6612_motor_set_speed(const tb6612_motor_t *motor, float speed)
     if (speed == 0.0f)
     {
         // Active brake
-        gpio_set_level(motor->in1_pin, 1);
-        gpio_set_level(motor->in2_pin, 1);
+        gpio_set_level(motor->in1_pin, 0);
+        gpio_set_level(motor->in2_pin, 0);
         mcpwm_set_duty(motor->unit, motor->timer, motor->op, 0.0f); // No PWM during brake
     }
     else
     {
-        float min_duty = 0.0f; // Minimum effective duty
+        float min_duty = 0.05f; // Minimum effective duty
         float duty = (min_duty + (1.0f - min_duty) * fabsf(speed)) * 100.0f;
 
         if (speed > 0.0f)

@@ -59,8 +59,14 @@
 rcl_publisher_t axis_a_position_publisher;
 std_msgs__msg__Float32 axis_a_position_publisher_msg;
 
+rcl_publisher_t axis_a_speed_publisher;
+std_msgs__msg__Float32 axis_a_speed_publisher_msg;
+
 rcl_publisher_t axis_b_position_publisher;
 std_msgs__msg__Float32 axis_b_position_publisher_msg;
+
+rcl_publisher_t axis_b_speed_publisher;
+std_msgs__msg__Float32 axis_b_speed_publisher_msg;
 
 rcl_subscription_t axis_a_position_subscriber;
 std_msgs__msg__Float32 axis_a_position_subscriber_msg;
@@ -110,9 +116,19 @@ float axis_a_get_position(void)
     return as5600_get_position(&wrist.axis_a.encoder);
 }
 
+float axis_a_get_speed(void)
+{
+    return as5600_get_velocity(&wrist.axis_a.encoder);
+}
+
 float axis_b_get_position(void)
 {
     return as5600_get_position(&wrist.axis_b.encoder);
+}
+
+float axis_b_get_speed(void)
+{
+    return as5600_get_velocity(&wrist.axis_b.encoder);
 }
 
 void IRAM_ATTR timer_isr(void *arg)
@@ -194,9 +210,13 @@ void timer_callback(rcl_timer_t *timer, int64_t last_call_time)
     {
         axis_a_position_publisher_msg.data = axis_a_get_position();
         RCSOFTCHECK(rcl_publish(&axis_a_position_publisher, &axis_a_position_publisher_msg, NULL));
+        axis_a_speed_publisher_msg.data = axis_a_get_speed();
+        RCSOFTCHECK(rcl_publish(&axis_a_speed_publisher, &axis_a_speed_publisher_msg, NULL));
 
         axis_b_position_publisher_msg.data = axis_b_get_position();
         RCSOFTCHECK(rcl_publish(&axis_b_position_publisher, &axis_b_position_publisher_msg, NULL));
+        axis_b_speed_publisher_msg.data = axis_b_get_speed();
+        RCSOFTCHECK(rcl_publish(&axis_b_speed_publisher, &axis_b_speed_publisher_msg, NULL));
     }
 }
 
@@ -214,25 +234,37 @@ void micro_ros_task(void *arg)
         &axis_a_position_publisher,
         &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
-        "axis_a/get_position"));
+        "/axis_a/get_position"));
+
+    RCCHECK(rclc_publisher_init_default(
+        &axis_a_speed_publisher,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
+        "/axis_a/get_speed"));
 
     RCCHECK(rclc_publisher_init_default(
         &axis_b_position_publisher,
         &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
-        "axis_b/get_position"));
+        "/axis_b/get_position"));
+
+    RCCHECK(rclc_publisher_init_default(
+        &axis_b_speed_publisher,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
+        "/axis_b/get_speed"));
 
     RCCHECK(rclc_subscription_init_default(
         &axis_a_position_subscriber,
         &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
-        "axis_a/set_position"));
+        "/axis_a/set_position"));
 
     RCCHECK(rclc_subscription_init_default(
         &axis_b_position_subscriber,
         &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
-        "axis_b/set_position"));
+        "/axis_b/set_position"));
 
     rcl_timer_t timer;
     const unsigned int timer_timeout = 20;
@@ -244,7 +276,7 @@ void micro_ros_task(void *arg)
         true));
 
     rclc_executor_t executor;
-    RCCHECK(rclc_executor_init(&executor, &support.context, 3, &allocator));
+    RCCHECK(rclc_executor_init(&executor, &support.context, 5, &allocator));
     RCCHECK(rclc_executor_add_timer(&executor, &timer));
 
     RCCHECK(rclc_executor_add_subscription(
@@ -261,9 +293,6 @@ void micro_ros_task(void *arg)
         axis_b_position_subscriber_callback,
         ON_NEW_DATA));
 
-    axis_a_position_publisher_msg.data = 0.0f;
-    axis_b_position_publisher_msg.data = 0.0f;
-
     while (1)
     {
         rclc_executor_spin_some(&executor, RCL_MS_TO_NS(100));
@@ -272,7 +301,9 @@ void micro_ros_task(void *arg)
 
     // free resources
     RCCHECK(rcl_publisher_fini(&axis_a_position_publisher, &node));
+    RCCHECK(rcl_publisher_fini(&axis_a_speed_publisher, &node));
     RCCHECK(rcl_publisher_fini(&axis_b_position_publisher, &node));
+    RCCHECK(rcl_publisher_fini(&axis_b_speed_publisher, &node));
     RCCHECK(rcl_node_fini(&node));
 
     vTaskDelete(NULL);
@@ -351,9 +382,13 @@ void pid_loop_task(void *param)
                 float change_percent_a = total_updates_a ? (100.0f * change_count_a / total_updates_a) : 0.0f;
                 float change_percent_b = total_updates_b ? (100.0f * change_count_b / total_updates_b) : 0.0f;
 
-                ESP_LOGD(TAG,
-                         "PID Freq: %.2f Hz | Loop Time: %.0f us | Encoder A change: %.2f%% | Encoder B change: %.2f%%",
-                         measured_pid_frequency, measured_loop_time_us, change_percent_a, change_percent_b);
+                ESP_LOGI(TAG,
+                         "PID Freq: %.2f Hz | Loop Time: %.0f us | "
+                         "Ctrl A: %.4f | Ctrl B: %.4f | "
+                         "Enc A Δ: %.2f%% | Enc B Δ: %.2f%%",
+                         measured_pid_frequency, measured_loop_time_us,
+                         differential_control_signal, common_control_signal,
+                         change_percent_a, change_percent_b);
 
                 change_count_a = 0;
                 change_count_b = 0;
@@ -426,11 +461,11 @@ void app_main(void)
 
     float dt = 1.0f / PID_LOOP_FREQUENCY;
 
-    pid_init(&wrist.axis_a.pid, 10.0f, 0.0f, 0.0f, dt);
-    pid_init(&wrist.axis_b.pid, 10.0f, 0.0f, 0.0f, dt);
+    pid_init(&wrist.axis_a.pid, 3.0f, .0f, .0f, dt);
+    pid_init(&wrist.axis_b.pid, 3.0f, .0f, .0f, dt);
 
-    bool ok1 = as5600_init(&wrist.axis_a.encoder, I2C_MASTER_NUM_0, AS5600_DEFAULT_ADDR, 1.0f, 0.0f, 1.0f, -1);
-    bool ok2 = as5600_init(&wrist.axis_b.encoder, I2C_MASTER_NUM_1, AS5600_DEFAULT_ADDR, 1.0f, 0.0f, 1.0f, -1);
+    bool ok1 = as5600_init(&wrist.axis_a.encoder, I2C_MASTER_NUM_0, AS5600_DEFAULT_ADDR, .1f, 0.0f, 1.0f, -1);
+    bool ok2 = as5600_init(&wrist.axis_b.encoder, I2C_MASTER_NUM_1, AS5600_DEFAULT_ADDR, .1f, 0.0f, 1.0f, -1);
 
     if (!ok1 || !ok2)
     {
@@ -446,7 +481,7 @@ void app_main(void)
     xTaskCreatePinnedToCore(
         pid_loop_task,
         "pid_loop",
-        8000,
+        8192,
         NULL,
         10,
         NULL,
@@ -467,7 +502,7 @@ void app_main(void)
     xTaskCreatePinnedToCore(
         micro_ros_task,
         "uros_task",
-        16000,
+        16384,
         NULL,
         5,
         NULL,
