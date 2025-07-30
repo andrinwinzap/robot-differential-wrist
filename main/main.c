@@ -1,22 +1,72 @@
+#include <string.h>
 #include <stdio.h>
+#include <unistd.h>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
+#include "esp_log.h"
+#include "esp_system.h"
+#include "esp_timer.h"
+
+#include <rcl/rcl.h>
+#include <rcl/error_handling.h>
+#include <std_msgs/msg/float32.h>
+#include <std_msgs/msg/bool.h>
+#include <rclc/rclc.h>
+#include <rclc/executor.h>
+
+#include <rmw_microxrcedds_c/config.h>
+#include <rmw_microros/rmw_microros.h>
+#include "esp32_serial_transport.h"
+
 #include "driver/gpio.h"
 #include "driver/i2c.h"
+#include "driver/timer.h"
+#include "driver/uart.h"
+
+#include "nvs_flash.h"
+
 #include "as5600.h"
-#include "esp_log.h"
 #include "tb6612.h"
 #include "diff_speed_ctrl.h"
 #include "pid.h"
-#include "nvs_flash.h"
-#include "esp_timer.h"
-#include "driver/timer.h"
-#include "freertos/semphr.h"
+
 #include "home.h"
 #include "config.h"
 #include "wrist.h"
 
+#define RCCHECK(fn)                                                                      \
+    {                                                                                    \
+        rcl_ret_t temp_rc = fn;                                                          \
+        if ((temp_rc != RCL_RET_OK))                                                     \
+        {                                                                                \
+            printf("Failed status on line %d: %d. Aborting.\n", __LINE__, (int)temp_rc); \
+            vTaskDelete(NULL);                                                           \
+        }                                                                                \
+    }
+#define RCSOFTCHECK(fn)                                                                    \
+    {                                                                                      \
+        rcl_ret_t temp_rc = fn;                                                            \
+        if ((temp_rc != RCL_RET_OK))                                                       \
+        {                                                                                  \
+            printf("Failed status on line %d: %d. Continuing.\n", __LINE__, (int)temp_rc); \
+        }                                                                                  \
+    }
+
 #define TAG "AS5600_DUAL"
+
+rcl_publisher_t axis_a_position_publisher;
+std_msgs__msg__Float32 axis_a_position_publisher_msg;
+
+rcl_publisher_t axis_b_position_publisher;
+std_msgs__msg__Float32 axis_b_position_publisher_msg;
+
+rcl_subscription_t axis_a_position_subscriber;
+std_msgs__msg__Float32 axis_a_position_subscriber_msg;
+
+rcl_subscription_t axis_b_position_subscriber;
+std_msgs__msg__Float32 axis_b_position_subscriber_msg;
 
 SemaphoreHandle_t pid_semaphore;
 SemaphoreHandle_t homing_semaphore;
@@ -24,6 +74,28 @@ SemaphoreHandle_t homing_semaphore;
 wrist_t wrist;
 
 static homing_params_t homing_params;
+
+void axis_a_position_position_callback(const void *msgin)
+{
+    const std_msgs__msg__Float32 *msg = (const std_msgs__msg__Float32 *)msgin;
+    wrist.axis_a.pos_ctrl = msg->data;
+}
+
+void axis_b_position_position_callback(const void *msgin)
+{
+    const std_msgs__msg__Float32 *msg = (const std_msgs__msg__Float32 *)msgin;
+    wrist.axis_b.pos_ctrl = msg->data;
+}
+
+float axis_a_get_position(void)
+{
+    return as5600_get_position(&wrist.axis_a.encoder);
+}
+
+float axis_b_get_position(void)
+{
+    return as5600_get_position(&wrist.axis_b.encoder);
+}
 
 void IRAM_ATTR timer_isr(void *arg)
 {
@@ -95,6 +167,97 @@ void i2c_bus_init(i2c_port_t i2c_num, gpio_num_t sda, gpio_num_t scl)
     };
     ESP_ERROR_CHECK(i2c_param_config(i2c_num, &conf));
     ESP_ERROR_CHECK(i2c_driver_install(i2c_num, conf.mode, 0, 0, 0));
+}
+
+void timer_callback(rcl_timer_t *timer, int64_t last_call_time)
+{
+    RCLC_UNUSED(last_call_time);
+    if (timer != NULL)
+    {
+        axis_a_position_publisher_msg.data = axis_a_get_position();
+        RCSOFTCHECK(rcl_publish(&axis_a_position_publisher, &axis_a_position_publisher_msg, NULL));
+
+        axis_b_position_publisher_msg.data = axis_b_get_position();
+        RCSOFTCHECK(rcl_publish(&axis_b_position_publisher, &axis_b_position_publisher_msg, NULL));
+    }
+}
+
+void micro_ros_task(void *arg)
+{
+    rcl_allocator_t allocator = rcl_get_default_allocator();
+    rclc_support_t support;
+
+    RCCHECK(rclc_support_init(&support, 0, NULL, &allocator));
+
+    rcl_node_t node;
+    RCCHECK(rclc_node_init_default(&node, "wrist", "", &support));
+
+    RCCHECK(rclc_publisher_init_default(
+        &axis_a_position_publisher,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
+        "axis_a/get_position"));
+
+    RCCHECK(rclc_publisher_init_default(
+        &axis_b_position_publisher,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
+        "axis_b/get_position"));
+
+    RCCHECK(rclc_subscription_init_default(
+        &axis_a_position_subscriber,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
+        "axis_a/set_position"));
+
+    RCCHECK(rclc_subscription_init_default(
+        &axis_b_position_subscriber,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
+        "axis_b/set_position"));
+
+    rcl_timer_t timer;
+    const unsigned int timer_timeout = 20;
+    RCCHECK(rclc_timer_init_default2(
+        &timer,
+        &support,
+        RCL_MS_TO_NS(timer_timeout),
+        timer_callback,
+        true));
+
+    rclc_executor_t executor;
+    RCCHECK(rclc_executor_init(&executor, &support.context, 3, &allocator));
+    RCCHECK(rclc_executor_add_timer(&executor, &timer));
+
+    RCCHECK(rclc_executor_add_subscription(
+        &executor,
+        &axis_a_position_subscriber,
+        &axis_a_position_subscriber_msg,
+        axis_a_position_position_callback,
+        ON_NEW_DATA));
+
+    RCCHECK(rclc_executor_add_subscription(
+        &executor,
+        &axis_b_position_subscriber,
+        &axis_b_position_subscriber_msg,
+        axis_b_position_position_callback,
+        ON_NEW_DATA));
+
+    axis_a_position_publisher_msg.data = 0.0f;
+    axis_b_position_publisher_msg.data = 0.0f;
+
+    while (1)
+    {
+        rclc_executor_spin_some(&executor, RCL_MS_TO_NS(100));
+        usleep(10000);
+    }
+
+    // free resources
+    RCCHECK(rcl_publisher_fini(&axis_a_position_publisher, &node));
+    RCCHECK(rcl_publisher_fini(&axis_b_position_publisher, &node));
+    RCCHECK(rcl_node_fini(&node));
+
+    vTaskDelete(NULL);
 }
 
 void pid_loop_task(void *param)
@@ -186,8 +349,28 @@ void pid_loop_task(void *param)
     }
 }
 
+static size_t uart_port = UART_NUM_1;
+
 void app_main(void)
 {
+    ESP_LOGI(TAG, "Starting Setup...");
+
+#if defined(RMW_UXRCE_TRANSPORT_CUSTOM)
+    rmw_uros_set_custom_transport(
+        true,
+        (void *)&uart_port,
+        esp32_serial_open,
+        esp32_serial_close,
+        esp32_serial_write,
+        esp32_serial_read);
+#else
+#error micro-ROS transports misconfigured
+#endif // RMW_UXRCE_TRANSPORT_CUSTOM
+
+    esp_log_level_set("pid", ESP_LOG_INFO);
+    esp_log_level_set("as5600", ESP_LOG_INFO);
+    esp_log_level_set("homing", ESP_LOG_INFO);
+
     pid_semaphore = xSemaphoreCreateBinary();
     homing_semaphore = xSemaphoreCreateBinary();
     init_control_timer();
@@ -261,5 +444,14 @@ void app_main(void)
         &homing_params,
         5,
         NULL,
-        1);
+        0);
+
+    xTaskCreatePinnedToCore(
+        micro_ros_task,
+        "uros_task",
+        16000,
+        NULL,
+        5,
+        NULL,
+        0);
 }
