@@ -75,16 +75,34 @@ wrist_t wrist;
 
 static homing_params_t homing_params;
 
-void axis_a_position_position_callback(const void *msgin)
+void axis_a_position_subscriber_callback(const void *msgin)
 {
     const std_msgs__msg__Float32 *msg = (const std_msgs__msg__Float32 *)msgin;
-    wrist.axis_a.pos_ctrl = msg->data;
+    float pos = msg->data;
+    if (pos > A_AXIS_MAX)
+    {
+        pos = A_AXIS_MAX;
+    }
+    else if (pos < A_AXIS_MIN)
+    {
+        pos = A_AXIS_MIN;
+    }
+    wrist.axis_a.pos_ctrl = pos;
 }
 
-void axis_b_position_position_callback(const void *msgin)
+void axis_b_position_subscriber_callback(const void *msgin)
 {
     const std_msgs__msg__Float32 *msg = (const std_msgs__msg__Float32 *)msgin;
-    wrist.axis_b.pos_ctrl = msg->data;
+    float pos = msg->data;
+    if (pos > B_AXIS_MAX)
+    {
+        pos = B_AXIS_MAX;
+    }
+    else if (pos < B_AXIS_MIN)
+    {
+        pos = B_AXIS_MIN;
+    }
+    wrist.axis_b.pos_ctrl = pos;
 }
 
 float axis_a_get_position(void)
@@ -233,14 +251,14 @@ void micro_ros_task(void *arg)
         &executor,
         &axis_a_position_subscriber,
         &axis_a_position_subscriber_msg,
-        axis_a_position_position_callback,
+        axis_a_position_subscriber_callback,
         ON_NEW_DATA));
 
     RCCHECK(rclc_executor_add_subscription(
         &executor,
         &axis_b_position_subscriber,
         &axis_b_position_subscriber_msg,
-        axis_b_position_position_callback,
+        axis_b_position_subscriber_callback,
         ON_NEW_DATA));
 
     axis_a_position_publisher_msg.data = 0.0f;
