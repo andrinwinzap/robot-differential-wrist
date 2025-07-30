@@ -2,9 +2,9 @@
 #define CONFIG_H
 
 #define ENDSTOP_A_PIN GPIO_NUM_11
-#define A_AXIS_MAX M_PI / 2.0f - 0.015
-#define A_AXIS_MIN -M_PI / 2.0f + 0.015
-#define ENDSTOP_A_POSITION A_AXIS_MAX - 0.035
+#define A_AXIS_MAX M_PI / 2.0f - 0.03
+#define A_AXIS_MIN -M_PI / 2.0f + 0.03
+#define ENDSTOP_A_POSITION A_AXIS_MAX - 0.01
 
 #define ENDSTOP_B_PIN GPIO_NUM_8
 #define B_AXIS_MAX M_PI
