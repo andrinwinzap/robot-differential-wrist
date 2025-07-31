@@ -35,38 +35,25 @@
 #include "home.h"
 #include "config.h"
 #include "wrist.h"
+#include "macros.h"
 
-#define RCCHECK(fn)                                                                      \
-    {                                                                                    \
-        rcl_ret_t temp_rc = fn;                                                          \
-        if ((temp_rc != RCL_RET_OK))                                                     \
-        {                                                                                \
-            printf("Failed status on line %d: %d. Aborting.\n", __LINE__, (int)temp_rc); \
-            vTaskDelete(NULL);                                                           \
-        }                                                                                \
-    }
-#define RCSOFTCHECK(fn)                                                                    \
-    {                                                                                      \
-        rcl_ret_t temp_rc = fn;                                                            \
-        if ((temp_rc != RCL_RET_OK))                                                       \
-        {                                                                                  \
-            printf("Failed status on line %d: %d. Continuing.\n", __LINE__, (int)temp_rc); \
-        }                                                                                  \
-    }
-
-#define TAG "AS5600_DUAL"
+#define TOPIC_BUFFER_SIZE 64
 
 rcl_publisher_t axis_a_position_publisher;
 std_msgs__msg__Float32 axis_a_position_publisher_msg;
+char axis_a_position_publisher_topic[TOPIC_BUFFER_SIZE];
 
 rcl_publisher_t axis_b_position_publisher;
 std_msgs__msg__Float32 axis_b_position_publisher_msg;
+char axis_b_position_publisher_topic[TOPIC_BUFFER_SIZE];
 
 rcl_subscription_t axis_a_position_subscriber;
 std_msgs__msg__Float32 axis_a_position_subscriber_msg;
+char axis_a_position_subscriber_topic[TOPIC_BUFFER_SIZE];
 
 rcl_subscription_t axis_b_position_subscriber;
 std_msgs__msg__Float32 axis_b_position_subscriber_msg;
+char axis_b_position_subscriber_topic[TOPIC_BUFFER_SIZE];
 
 SemaphoreHandle_t pid_semaphore;
 SemaphoreHandle_t homing_semaphore;
@@ -74,6 +61,10 @@ SemaphoreHandle_t homing_semaphore;
 wrist_t wrist;
 
 static homing_params_t homing_params;
+
+static const char *TAG = "Wrist";
+
+static size_t uart_port = UART_NUM_1;
 
 void axis_a_position_subscriber_callback(const void *msgin)
 {
@@ -187,6 +178,19 @@ void i2c_bus_init(i2c_port_t i2c_num, gpio_num_t sda, gpio_num_t scl)
     ESP_ERROR_CHECK(i2c_driver_install(i2c_num, conf.mode, 0, 0, 0));
 }
 
+void nvs_init()
+{
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
+    {
+        ESP_LOGW(TAG, "NVS partition truncated or new version found, erasing...");
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+    ESP_LOGI(TAG, "NVS initialized successfully");
+}
+
 void timer_callback(rcl_timer_t *timer, int64_t last_call_time)
 {
     RCLC_UNUSED(last_call_time);
@@ -214,25 +218,25 @@ void micro_ros_task(void *arg)
         &axis_a_position_publisher,
         &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
-        "/axis_a/get_position"));
+        axis_a_position_publisher_topic));
 
     RCCHECK(rclc_publisher_init_default(
         &axis_b_position_publisher,
         &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
-        "/axis_b/get_position"));
+        axis_b_position_publisher_topic));
 
     RCCHECK(rclc_subscription_init_default(
         &axis_a_position_subscriber,
         &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
-        "/axis_a/set_position"));
+        axis_a_position_subscriber_topic));
 
     RCCHECK(rclc_subscription_init_default(
         &axis_b_position_subscriber,
         &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
-        "/axis_b/set_position"));
+        axis_b_position_subscriber_topic));
 
     rcl_timer_t timer;
     const unsigned int timer_timeout = 20;
@@ -368,41 +372,20 @@ void pid_loop_task(void *param)
     }
 }
 
-static size_t uart_port = UART_NUM_1;
-
 void app_main(void)
 {
     ESP_LOGI(TAG, "Starting Setup...");
 
-#if defined(RMW_UXRCE_TRANSPORT_CUSTOM)
-    rmw_uros_set_custom_transport(
-        true,
-        (void *)&uart_port,
-        esp32_serial_open,
-        esp32_serial_close,
-        esp32_serial_write,
-        esp32_serial_read);
-#else
-#error micro-ROS transports misconfigured
-#endif // RMW_UXRCE_TRANSPORT_CUSTOM
-
-    esp_log_level_set("pid", ESP_LOG_INFO);
-    esp_log_level_set("as5600", ESP_LOG_INFO);
-    esp_log_level_set("homing", ESP_LOG_INFO);
+    snprintf(axis_a_position_publisher_topic, TOPIC_BUFFER_SIZE, "/%s/%s/get_position", robot_name, axis_a_name);
+    snprintf(axis_a_position_subscriber_topic, TOPIC_BUFFER_SIZE, "/%s/%s/set_position", robot_name, axis_a_name);
+    snprintf(axis_b_position_publisher_topic, TOPIC_BUFFER_SIZE, "/%s/%s/get_position", robot_name, axis_b_name);
+    snprintf(axis_b_position_subscriber_topic, TOPIC_BUFFER_SIZE, "/%s/%s/set_position", robot_name, axis_b_name);
 
     pid_semaphore = xSemaphoreCreateBinary();
     homing_semaphore = xSemaphoreCreateBinary();
-    init_control_timer();
 
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
-    {
-        ESP_LOGW(TAG, "NVS partition truncated or new version found, erasing...");
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(ret);
-    ESP_LOGI(TAG, "NVS initialized successfully");
+    init_control_timer();
+    nvs_init();
 
     gpio_input_init(ENDSTOP_A_PIN);
     gpio_input_init(ENDSTOP_B_PIN);
@@ -422,16 +405,15 @@ void app_main(void)
     wrist.diff_speed_ctrl.cb1 = &motor1_cb;
     wrist.diff_speed_ctrl.cb2 = &motor2_cb;
     wrist.diff_speed_ctrl.gear_ratio = 20.0f / 29.0f;
+
     wrist.diff_speed_ctrl.common_speed = 0.0f;
     wrist.diff_speed_ctrl.differential_speed = 0.0f;
 
-    float dt = 1.0f / PID_LOOP_FREQUENCY;
+    pid_init(&wrist.axis_a.pid, 3.0f, .0f, .0f, 1.0f / PID_LOOP_FREQUENCY);
+    pid_init(&wrist.axis_b.pid, 3.0f, .0f, .0f, 1.0f / PID_LOOP_FREQUENCY);
 
-    pid_init(&wrist.axis_a.pid, 3.0f, .0f, .0f, dt);
-    pid_init(&wrist.axis_b.pid, 3.0f, .0f, .0f, dt);
-
-    bool ok1 = as5600_init(&wrist.axis_a.encoder, I2C_MASTER_NUM_0, AS5600_DEFAULT_ADDR, .1f, 0.0f, 1.0f, -1);
-    bool ok2 = as5600_init(&wrist.axis_b.encoder, I2C_MASTER_NUM_1, AS5600_DEFAULT_ADDR, .1f, 0.0f, 1.0f, -1);
+    bool ok1 = as5600_init(&wrist.axis_a.encoder, I2C_MASTER_NUM_0, AS5600_DEFAULT_ADDR, .1f, 0.0f, 1.0f, -1, false);
+    bool ok2 = as5600_init(&wrist.axis_b.encoder, I2C_MASTER_NUM_1, AS5600_DEFAULT_ADDR, .1f, 0.0f, 1.0f, -1, false);
 
     if (!ok1 || !ok2)
     {
@@ -444,26 +426,38 @@ void app_main(void)
     wrist.axis_a.pos_ctrl = as5600_get_position(&wrist.axis_a.encoder);
     wrist.axis_b.pos_ctrl = as5600_get_position(&wrist.axis_b.encoder);
 
+    homing_params.homing_semaphore = homing_semaphore;
+    homing_params.wrist = &wrist;
+
     xTaskCreatePinnedToCore(
         pid_loop_task,
         "pid_loop",
-        8192,
+        16384,
         NULL,
         10,
         NULL,
         1);
 
-    homing_params.homing_semaphore = homing_semaphore;
-    homing_params.wrist = &wrist;
-
     xTaskCreatePinnedToCore(
         homing_task,
         "homing_task",
-        4096,
+        8192,
         &homing_params,
         5,
         NULL,
         0);
+
+#if defined(RMW_UXRCE_TRANSPORT_CUSTOM)
+    rmw_uros_set_custom_transport(
+        true,
+        (void *)&uart_port,
+        esp32_serial_open,
+        esp32_serial_close,
+        esp32_serial_write,
+        esp32_serial_read);
+#else
+#error micro-ROS transports misconfigured
+#endif // RMW_UXRCE_TRANSPORT_CUSTOM
 
     xTaskCreatePinnedToCore(
         micro_ros_task,

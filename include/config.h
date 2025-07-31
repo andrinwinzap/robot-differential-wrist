@@ -37,4 +37,8 @@
 #define TIMER_GROUP TIMER_GROUP_0
 #define TIMER_IDX TIMER_0
 
+static const char *robot_name = "robot";
+static const char *axis_a_name = "joint_5";
+static const char *axis_b_name = "joint_6";
+
 #endif // CONFIG_H
