@@ -414,8 +414,8 @@ void app_main(void)
     pid_init(&wrist.axis_a.pid, 3.0f, .0f, .0f, 1.0f / PID_LOOP_FREQUENCY);
     pid_init(&wrist.axis_b.pid, 3.0f, .0f, .0f, 1.0f / PID_LOOP_FREQUENCY);
 
-    bool ok1 = as5600_init(&wrist.axis_a.encoder, I2C_MASTER_NUM_0, AS5600_DEFAULT_ADDR, .1f, 0.0f, 1.0f, -1, false);
-    bool ok2 = as5600_init(&wrist.axis_b.encoder, I2C_MASTER_NUM_1, AS5600_DEFAULT_ADDR, .1f, 0.0f, 1.0f, -1, false);
+    bool ok1 = as5600_init(&wrist.axis_a.encoder, I2C_MASTER_NUM_0, AS5600_DEFAULT_ADDR, .1f, 0.0f, 1.0f, -1, true);
+    bool ok2 = as5600_init(&wrist.axis_b.encoder, I2C_MASTER_NUM_1, AS5600_DEFAULT_ADDR, .1f, 0.0f, 1.0f, -1, true);
 
     if (!ok1 || !ok2)
     {
