@@ -22,7 +22,7 @@
 
 #include "driver/gpio.h"
 #include "driver/i2c.h"
-#include "driver/timer.h"
+#include "driver/gptimer.h"
 #include "driver/uart.h"
 
 #include "nvs_flash.h"
@@ -66,6 +66,8 @@ static const char *TAG = "Wrist";
 
 static size_t uart_port = UART_NUM_1;
 
+static gptimer_handle_t control_timer = NULL;
+
 void axis_a_position_subscriber_callback(const void *msgin)
 {
     const std_msgs__msg__Float32 *msg = (const std_msgs__msg__Float32 *)msgin;
@@ -106,40 +108,40 @@ float axis_b_get_position(void)
     return as5600_get_position(&wrist.axis_b.encoder);
 }
 
-void IRAM_ATTR timer_isr(void *arg)
+bool IRAM_ATTR gptimer_callback(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_data)
 {
     BaseType_t high_task_wakeup = pdFALSE;
-
-    timer_group_clr_intr_status_in_isr(TIMER_GROUP, TIMER_IDX);
-    timer_group_enable_alarm_in_isr(TIMER_GROUP, TIMER_IDX);
 
     xSemaphoreGiveFromISR(pid_semaphore, &high_task_wakeup);
     xSemaphoreGiveFromISR(homing_semaphore, &high_task_wakeup);
 
-    if (high_task_wakeup)
-    {
-        portYIELD_FROM_ISR();
-    }
+    return high_task_wakeup == pdTRUE;
 }
 
 void init_control_timer()
 {
-    timer_config_t config = {
-        .divider = 80, // 1 tick = 1 microsecond (assuming 80 MHz APB clock)
-        .counter_dir = TIMER_COUNT_UP,
-        .counter_en = TIMER_PAUSE,
-        .alarm_en = TIMER_ALARM_EN,
-        .auto_reload = true,
+    gptimer_config_t timer_config = {
+        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
+        .direction = GPTIMER_COUNT_UP,
+        .resolution_hz = 1000000, // 1 MHz -> 1 tick = 1 microsecond
     };
-    ESP_ERROR_CHECK(timer_init(TIMER_GROUP, TIMER_IDX, &config));
 
-    // Set alarm every (1.0 / PID_LOOP_FREQUENCY) seconds
-    double alarm_time_sec = 1.0 / PID_LOOP_FREQUENCY;
-    ESP_ERROR_CHECK(timer_set_counter_value(TIMER_GROUP, TIMER_IDX, 0));
-    ESP_ERROR_CHECK(timer_set_alarm_value(TIMER_GROUP, TIMER_IDX, alarm_time_sec * 1000000)); // microseconds
-    ESP_ERROR_CHECK(timer_enable_intr(TIMER_GROUP, TIMER_IDX));
-    ESP_ERROR_CHECK(timer_isr_register(TIMER_GROUP, TIMER_IDX, timer_isr, NULL, ESP_INTR_FLAG_IRAM, NULL));
-    ESP_ERROR_CHECK(timer_start(TIMER_GROUP, TIMER_IDX));
+    ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &control_timer));
+
+    gptimer_event_callbacks_t callbacks = {
+        .on_alarm = gptimer_callback,
+    };
+    ESP_ERROR_CHECK(gptimer_register_event_callbacks(control_timer, &callbacks, NULL));
+
+    gptimer_alarm_config_t alarm_config = {
+        .alarm_count = 1000000 / PID_LOOP_FREQUENCY,
+        .reload_count = 0,
+        .flags.auto_reload_on_alarm = true,
+    };
+    ESP_ERROR_CHECK(gptimer_set_alarm_action(control_timer, &alarm_config));
+
+    ESP_ERROR_CHECK(gptimer_enable(control_timer));
+    ESP_ERROR_CHECK(gptimer_start(control_timer));
 }
 
 void motor1_cb(float speed)
