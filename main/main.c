@@ -59,14 +59,8 @@
 rcl_publisher_t axis_a_position_publisher;
 std_msgs__msg__Float32 axis_a_position_publisher_msg;
 
-rcl_publisher_t axis_a_speed_publisher;
-std_msgs__msg__Float32 axis_a_speed_publisher_msg;
-
 rcl_publisher_t axis_b_position_publisher;
 std_msgs__msg__Float32 axis_b_position_publisher_msg;
-
-rcl_publisher_t axis_b_speed_publisher;
-std_msgs__msg__Float32 axis_b_speed_publisher_msg;
 
 rcl_subscription_t axis_a_position_subscriber;
 std_msgs__msg__Float32 axis_a_position_subscriber_msg;
@@ -116,19 +110,9 @@ float axis_a_get_position(void)
     return as5600_get_position(&wrist.axis_a.encoder);
 }
 
-float axis_a_get_speed(void)
-{
-    return as5600_get_velocity(&wrist.axis_a.encoder);
-}
-
 float axis_b_get_position(void)
 {
     return as5600_get_position(&wrist.axis_b.encoder);
-}
-
-float axis_b_get_speed(void)
-{
-    return as5600_get_velocity(&wrist.axis_b.encoder);
 }
 
 void IRAM_ATTR timer_isr(void *arg)
@@ -210,13 +194,9 @@ void timer_callback(rcl_timer_t *timer, int64_t last_call_time)
     {
         axis_a_position_publisher_msg.data = axis_a_get_position();
         RCSOFTCHECK(rcl_publish(&axis_a_position_publisher, &axis_a_position_publisher_msg, NULL));
-        axis_a_speed_publisher_msg.data = axis_a_get_speed();
-        RCSOFTCHECK(rcl_publish(&axis_a_speed_publisher, &axis_a_speed_publisher_msg, NULL));
 
         axis_b_position_publisher_msg.data = axis_b_get_position();
         RCSOFTCHECK(rcl_publish(&axis_b_position_publisher, &axis_b_position_publisher_msg, NULL));
-        axis_b_speed_publisher_msg.data = axis_b_get_speed();
-        RCSOFTCHECK(rcl_publish(&axis_b_speed_publisher, &axis_b_speed_publisher_msg, NULL));
     }
 }
 
@@ -237,22 +217,10 @@ void micro_ros_task(void *arg)
         "/axis_a/get_position"));
 
     RCCHECK(rclc_publisher_init_default(
-        &axis_a_speed_publisher,
-        &node,
-        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
-        "/axis_a/get_speed"));
-
-    RCCHECK(rclc_publisher_init_default(
         &axis_b_position_publisher,
         &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
         "/axis_b/get_position"));
-
-    RCCHECK(rclc_publisher_init_default(
-        &axis_b_speed_publisher,
-        &node,
-        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
-        "/axis_b/get_speed"));
 
     RCCHECK(rclc_subscription_init_default(
         &axis_a_position_subscriber,
@@ -276,7 +244,7 @@ void micro_ros_task(void *arg)
         true));
 
     rclc_executor_t executor;
-    RCCHECK(rclc_executor_init(&executor, &support.context, 5, &allocator));
+    RCCHECK(rclc_executor_init(&executor, &support.context, 3, &allocator));
     RCCHECK(rclc_executor_add_timer(&executor, &timer));
 
     RCCHECK(rclc_executor_add_subscription(
@@ -301,9 +269,7 @@ void micro_ros_task(void *arg)
 
     // free resources
     RCCHECK(rcl_publisher_fini(&axis_a_position_publisher, &node));
-    RCCHECK(rcl_publisher_fini(&axis_a_speed_publisher, &node));
     RCCHECK(rcl_publisher_fini(&axis_b_position_publisher, &node));
-    RCCHECK(rcl_publisher_fini(&axis_b_speed_publisher, &node));
     RCCHECK(rcl_node_fini(&node));
 
     vTaskDelete(NULL);
