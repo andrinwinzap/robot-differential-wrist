@@ -392,11 +392,11 @@ void app_main(void)
     gpio_input_init(ENDSTOP_A_PIN);
     gpio_input_init(ENDSTOP_B_PIN);
 
-    i2c_bus_init(I2C_MASTER_NUM_0, I2C_MASTER_SDA_IO_0, I2C_MASTER_SCL_IO_0);
-    i2c_bus_init(I2C_MASTER_NUM_1, I2C_MASTER_SDA_IO_1, I2C_MASTER_SCL_IO_1);
+    i2c_bus_init(AS5600_A_I2C_PORT, AS5600_A_I2C_SDA, AS5600_A_I2C_SCL);
+    i2c_bus_init(AS5600_B_I2C_PORT, AS5600_B_I2C_SDA, AS5600_B_I2C_SCL);
 
-    tb6612_motor_init(&wrist.motor_1, GPIO_NUM_4, GPIO_NUM_5, GPIO_NUM_6, MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A);
-    tb6612_motor_init(&wrist.motor_2, GPIO_NUM_12, GPIO_NUM_13, GPIO_NUM_14, MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_A);
+    tb6612_motor_init(&wrist.motor_1, TB6612_A_IN1, TB6612_A_IN2, TB6612_A_PWM, MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A);
+    tb6612_motor_init(&wrist.motor_2, TB6612_B_IN1, TB6612_B_IN2, TB6612_B_PWM, MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_A);
 
     wrist.axis_a.pos_ctrl = 0.0f;
     wrist.axis_a.speed_ctrl = 0.0f;
@@ -406,16 +406,16 @@ void app_main(void)
 
     wrist.diff_speed_ctrl.cb1 = &motor1_cb;
     wrist.diff_speed_ctrl.cb2 = &motor2_cb;
-    wrist.diff_speed_ctrl.gear_ratio = 20.0f / 29.0f;
+    wrist.diff_speed_ctrl.gear_ratio = COMMON_GEAR_RATIO;
 
     wrist.diff_speed_ctrl.common_speed = 0.0f;
     wrist.diff_speed_ctrl.differential_speed = 0.0f;
 
-    pid_init(&wrist.axis_a.pid, 3.0f, .0f, .0f, 1.0f / PID_LOOP_FREQUENCY);
-    pid_init(&wrist.axis_b.pid, 3.0f, .0f, .0f, 1.0f / PID_LOOP_FREQUENCY);
+    pid_init(&wrist.axis_a.pid, AXIS_A_KP, AXIS_A_KI, AXIS_A_KI, 1.0f / PID_LOOP_FREQUENCY);
+    pid_init(&wrist.axis_b.pid, AXIS_B_KP, AXIS_B_KI, AXIS_B_KI, 1.0f / PID_LOOP_FREQUENCY);
 
-    bool ok1 = as5600_init(&wrist.axis_a.encoder, I2C_MASTER_NUM_0, AS5600_DEFAULT_ADDR, .1f, 0.0f, 1.0f, -1, true);
-    bool ok2 = as5600_init(&wrist.axis_b.encoder, I2C_MASTER_NUM_1, AS5600_DEFAULT_ADDR, .1f, 0.0f, 1.0f, -1, true);
+    bool ok1 = as5600_init(&wrist.axis_a.encoder, AS5600_A_I2C_PORT, AS5600_DEFAULT_ADDR, AS5600_A_VELOCITY_FILTER_ALPHA, AS5600_A_VELOCITY_DEADBAND, AS5600_A_SCALE_FACTOR, AS5600_A_DIRECTION, AS5600_A_ENABLE_NVS);
+    bool ok2 = as5600_init(&wrist.axis_b.encoder, AS5600_B_I2C_PORT, AS5600_DEFAULT_ADDR, AS5600_B_VELOCITY_FILTER_ALPHA, AS5600_B_VELOCITY_DEADBAND, AS5600_B_SCALE_FACTOR, AS5600_B_DIRECTION, AS5600_B_ENABLE_NVS);
 
     if (!ok1 || !ok2)
     {
@@ -423,7 +423,7 @@ void app_main(void)
         return;
     }
 
-    ESP_LOGI(TAG, "Encoders initialized on I2C_NUM_0 and I2C_NUM_1.");
+    ESP_LOGI(TAG, "Encoders initialized");
 
     wrist.axis_a.pos_ctrl = as5600_get_position(&wrist.axis_a.encoder);
     wrist.axis_b.pos_ctrl = as5600_get_position(&wrist.axis_b.encoder);
