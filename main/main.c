@@ -12,6 +12,7 @@
 #include <rcl/rcl.h>
 #include <rcl/error_handling.h>
 #include <std_msgs/msg/float32.h>
+#include <std_msgs/msg/float32_multi_array.h>
 #include <std_msgs/msg/bool.h>
 #include <rclc/rclc.h>
 #include <rclc/executor.h>
@@ -38,22 +39,28 @@
 #include "macros.h"
 
 #define TOPIC_BUFFER_SIZE 64
+#define COMMAND_BUFFER_LEN 2
+#define STATE_BUFFER_LEN 2
 
-rcl_publisher_t axis_a_position_publisher;
-std_msgs__msg__Float32 axis_a_position_publisher_msg;
-char axis_a_position_publisher_topic[TOPIC_BUFFER_SIZE];
+rcl_publisher_t axis_a_state_publisher;
+std_msgs__msg__Float32MultiArray axis_a_state_publisher_msg;
+char axis_a_state_publisher_topic[TOPIC_BUFFER_SIZE];
+static float axis_a_state_buffer[STATE_BUFFER_LEN];
 
-rcl_publisher_t axis_b_position_publisher;
-std_msgs__msg__Float32 axis_b_position_publisher_msg;
-char axis_b_position_publisher_topic[TOPIC_BUFFER_SIZE];
+rcl_subscription_t axis_a_command_subscriber;
+std_msgs__msg__Float32MultiArray axis_a_command_subscriber_msg;
+char axis_a_command_subscriber_topic[TOPIC_BUFFER_SIZE];
+static float axis_a_command_buffer[COMMAND_BUFFER_LEN];
 
-rcl_subscription_t axis_a_position_subscriber;
-std_msgs__msg__Float32 axis_a_position_subscriber_msg;
-char axis_a_position_subscriber_topic[TOPIC_BUFFER_SIZE];
+rcl_publisher_t axis_b_state_publisher;
+std_msgs__msg__Float32MultiArray axis_b_state_publisher_msg;
+char axis_b_state_publisher_topic[TOPIC_BUFFER_SIZE];
+static float axis_b_state_buffer[STATE_BUFFER_LEN];
 
-rcl_subscription_t axis_b_position_subscriber;
-std_msgs__msg__Float32 axis_b_position_subscriber_msg;
-char axis_b_position_subscriber_topic[TOPIC_BUFFER_SIZE];
+rcl_subscription_t axis_b_command_subscriber;
+std_msgs__msg__Float32MultiArray axis_b_command_subscriber_msg;
+char axis_b_command_subscriber_topic[TOPIC_BUFFER_SIZE];
+static float axis_b_command_buffer[COMMAND_BUFFER_LEN];
 
 SemaphoreHandle_t pid_semaphore;
 SemaphoreHandle_t homing_semaphore;
@@ -68,10 +75,16 @@ static size_t uart_port = UART_NUM_1;
 
 static gptimer_handle_t control_timer = NULL;
 
-void axis_a_position_subscriber_callback(const void *msgin)
+void axis_a_command_subscriber_callback(const void *msgin)
 {
-    const std_msgs__msg__Float32 *msg = (const std_msgs__msg__Float32 *)msgin;
-    float pos = msg->data;
+    const std_msgs__msg__Float32MultiArray *msg = (const std_msgs__msg__Float32MultiArray *)msgin;
+    if (msg->data.size < 2)
+    {
+        ESP_LOGW(TAG, "Received command with insufficient data size: %zu", msg->data.size);
+        return;
+    }
+
+    float pos = msg->data.data[0];
     if (pos > A_AXIS_MAX)
     {
         pos = A_AXIS_MAX;
@@ -81,12 +94,21 @@ void axis_a_position_subscriber_callback(const void *msgin)
         pos = A_AXIS_MIN;
     }
     wrist.axis_a.pos_ctrl = pos;
+
+    float vel = msg->data.data[1];
+    wrist.axis_a.speed_ctrl = vel;
 }
 
-void axis_b_position_subscriber_callback(const void *msgin)
+void axis_b_command_subscriber_callback(const void *msgin)
 {
-    const std_msgs__msg__Float32 *msg = (const std_msgs__msg__Float32 *)msgin;
-    float pos = msg->data;
+    const std_msgs__msg__Float32MultiArray *msg = (const std_msgs__msg__Float32MultiArray *)msgin;
+    if (msg->data.size < 2)
+    {
+        ESP_LOGW(TAG, "Received command with insufficient data size: %zu", msg->data.size);
+        return;
+    }
+
+    float pos = msg->data.data[0];
     if (pos > B_AXIS_MAX)
     {
         pos = B_AXIS_MAX;
@@ -96,6 +118,9 @@ void axis_b_position_subscriber_callback(const void *msgin)
         pos = B_AXIS_MIN;
     }
     wrist.axis_b.pos_ctrl = pos;
+
+    float vel = msg->data.data[1];
+    wrist.axis_b.speed_ctrl = vel;
 }
 
 float axis_a_get_position(void)
@@ -198,11 +223,13 @@ void timer_callback(rcl_timer_t *timer, int64_t last_call_time)
     RCLC_UNUSED(last_call_time);
     if (timer != NULL)
     {
-        axis_a_position_publisher_msg.data = axis_a_get_position();
-        RCSOFTCHECK(rcl_publish(&axis_a_position_publisher, &axis_a_position_publisher_msg, NULL));
+        axis_a_state_publisher_msg.data.data[0] = axis_a_get_position();
+        axis_a_state_publisher_msg.data.data[1] = as5600_get_velocity(&wrist.axis_a.encoder);
+        RCSOFTCHECK(rcl_publish(&axis_a_state_publisher, &axis_a_state_publisher_msg, NULL));
 
-        axis_b_position_publisher_msg.data = axis_b_get_position();
-        RCSOFTCHECK(rcl_publish(&axis_b_position_publisher, &axis_b_position_publisher_msg, NULL));
+        axis_b_state_publisher_msg.data.data[0] = axis_b_get_position();
+        axis_b_state_publisher_msg.data.data[1] = as5600_get_velocity(&wrist.axis_b.encoder);
+        RCSOFTCHECK(rcl_publish(&axis_b_state_publisher, &axis_b_state_publisher_msg, NULL));
     }
 }
 
@@ -217,31 +244,51 @@ void micro_ros_task(void *arg)
     RCCHECK(rclc_node_init_default(&node, "wrist", "", &support));
 
     RCCHECK(rclc_publisher_init_default(
-        &axis_a_position_publisher,
+        &axis_a_state_publisher,
         &node,
-        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
-        axis_a_position_publisher_topic));
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),
+        axis_a_state_publisher_topic));
+
+    std_msgs__msg__Float32MultiArray__init(&axis_a_state_publisher_msg);
+    axis_a_state_publisher_msg.data.data = axis_a_state_buffer;
+    axis_a_state_publisher_msg.data.capacity = STATE_BUFFER_LEN;
+    axis_a_state_publisher_msg.data.size = STATE_BUFFER_LEN;
 
     RCCHECK(rclc_publisher_init_default(
-        &axis_b_position_publisher,
+        &axis_b_state_publisher,
         &node,
-        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
-        axis_b_position_publisher_topic));
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),
+        axis_b_state_publisher_topic));
+
+    std_msgs__msg__Float32MultiArray__init(&axis_b_state_publisher_msg);
+    axis_b_state_publisher_msg.data.data = axis_b_state_buffer;
+    axis_b_state_publisher_msg.data.capacity = STATE_BUFFER_LEN;
+    axis_b_state_publisher_msg.data.size = STATE_BUFFER_LEN;
 
     RCCHECK(rclc_subscription_init_default(
-        &axis_a_position_subscriber,
+        &axis_a_command_subscriber,
         &node,
-        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
-        axis_a_position_subscriber_topic));
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),
+        axis_a_command_subscriber_topic));
+
+    std_msgs__msg__Float32MultiArray__init(&axis_a_command_subscriber_msg);
+    axis_a_command_subscriber_msg.data.data = axis_a_command_buffer;
+    axis_a_command_subscriber_msg.data.capacity = COMMAND_BUFFER_LEN;
+    axis_a_command_subscriber_msg.data.size = 0;
+
+    std_msgs__msg__Float32MultiArray__init(&axis_b_command_subscriber_msg);
+    axis_b_command_subscriber_msg.data.data = axis_b_command_buffer;
+    axis_b_command_subscriber_msg.data.capacity = COMMAND_BUFFER_LEN;
+    axis_b_command_subscriber_msg.data.size = 0;
 
     RCCHECK(rclc_subscription_init_default(
-        &axis_b_position_subscriber,
+        &axis_b_command_subscriber,
         &node,
-        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
-        axis_b_position_subscriber_topic));
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),
+        axis_b_command_subscriber_topic));
 
     rcl_timer_t timer;
-    const unsigned int timer_timeout = 20;
+    const unsigned int timer_timeout = 100;
     RCCHECK(rclc_timer_init_default2(
         &timer,
         &support,
@@ -255,27 +302,26 @@ void micro_ros_task(void *arg)
 
     RCCHECK(rclc_executor_add_subscription(
         &executor,
-        &axis_a_position_subscriber,
-        &axis_a_position_subscriber_msg,
-        axis_a_position_subscriber_callback,
+        &axis_a_command_subscriber,
+        &axis_a_command_subscriber_msg,
+        axis_a_command_subscriber_callback,
         ON_NEW_DATA));
 
     RCCHECK(rclc_executor_add_subscription(
         &executor,
-        &axis_b_position_subscriber,
-        &axis_b_position_subscriber_msg,
-        axis_b_position_subscriber_callback,
+        &axis_b_command_subscriber,
+        &axis_b_command_subscriber_msg,
+        axis_b_command_subscriber_callback,
         ON_NEW_DATA));
 
     while (1)
     {
-        rclc_executor_spin_some(&executor, RCL_MS_TO_NS(100));
-        usleep(10000);
+        rclc_executor_spin_some(&executor, RCL_MS_TO_NS(10));
     }
 
     // free resources
-    RCCHECK(rcl_publisher_fini(&axis_a_position_publisher, &node));
-    RCCHECK(rcl_publisher_fini(&axis_b_position_publisher, &node));
+    RCCHECK(rcl_publisher_fini(&axis_a_state_publisher, &node));
+    RCCHECK(rcl_publisher_fini(&axis_b_state_publisher, &node));
     RCCHECK(rcl_node_fini(&node));
 
     vTaskDelete(NULL);
@@ -320,7 +366,7 @@ void pid_loop_task(void *param)
                 change_count_a++;
             prev_position_a = differential_position_measured;
 
-            float differential_control_signal = pid_update(&wrist.axis_a.pid, wrist.axis_a.pos_ctrl, differential_position_measured);
+            float differential_control_signal = pid_update(&wrist.axis_a.pid, wrist.axis_a.pos_ctrl, differential_position_measured, wrist.axis_a.speed_ctrl);
             if (fabsf(differential_control_signal) < CTRL_SIGNAL_THRESHOLD)
                 differential_control_signal = 0.0f;
             set_differential_speed(&wrist.diff_speed_ctrl, differential_control_signal);
@@ -332,7 +378,7 @@ void pid_loop_task(void *param)
                 change_count_b++;
             prev_position_b = common_position_measured;
 
-            float common_control_signal = pid_update(&wrist.axis_b.pid, wrist.axis_b.pos_ctrl, common_position_measured);
+            float common_control_signal = pid_update(&wrist.axis_b.pid, wrist.axis_b.pos_ctrl, common_position_measured, wrist.axis_b.speed_ctrl);
             if (fabsf(common_control_signal) < CTRL_SIGNAL_THRESHOLD)
                 common_control_signal = 0.0f;
             set_common_speed(&wrist.diff_speed_ctrl, common_control_signal);
@@ -354,7 +400,7 @@ void pid_loop_task(void *param)
                 float change_percent_a = total_updates_a ? (100.0f * change_count_a / total_updates_a) : 0.0f;
                 float change_percent_b = total_updates_b ? (100.0f * change_count_b / total_updates_b) : 0.0f;
 
-                ESP_LOGI(TAG,
+                ESP_LOGD(TAG,
                          "PID Freq: %.2f Hz | Loop Time: %.0f us | "
                          "Ctrl A: %.4f | Ctrl B: %.4f | "
                          "Enc A Δ: %.2f%% | Enc B Δ: %.2f%%",
@@ -378,10 +424,10 @@ void app_main(void)
 {
     ESP_LOGI(TAG, "Starting Setup...");
 
-    snprintf(axis_a_position_publisher_topic, TOPIC_BUFFER_SIZE, "/%s/%s/get_position", robot_name, axis_a_name);
-    snprintf(axis_a_position_subscriber_topic, TOPIC_BUFFER_SIZE, "/%s/%s/set_position", robot_name, axis_a_name);
-    snprintf(axis_b_position_publisher_topic, TOPIC_BUFFER_SIZE, "/%s/%s/get_position", robot_name, axis_b_name);
-    snprintf(axis_b_position_subscriber_topic, TOPIC_BUFFER_SIZE, "/%s/%s/set_position", robot_name, axis_b_name);
+    snprintf(axis_a_state_publisher_topic, TOPIC_BUFFER_SIZE, "/%s/%s/get_state", robot_name, axis_a_name);
+    snprintf(axis_a_command_subscriber_topic, TOPIC_BUFFER_SIZE, "/%s/%s/send_command", robot_name, axis_a_name);
+    snprintf(axis_b_state_publisher_topic, TOPIC_BUFFER_SIZE, "/%s/%s/get_state", robot_name, axis_b_name);
+    snprintf(axis_b_command_subscriber_topic, TOPIC_BUFFER_SIZE, "/%s/%s/send_command", robot_name, axis_b_name);
 
     pid_semaphore = xSemaphoreCreateBinary();
     homing_semaphore = xSemaphoreCreateBinary();
@@ -411,11 +457,11 @@ void app_main(void)
     wrist.diff_speed_ctrl.common_speed = 0.0f;
     wrist.diff_speed_ctrl.differential_speed = 0.0f;
 
-    pid_init(&wrist.axis_a.pid, AXIS_A_KP, AXIS_A_KI, AXIS_A_KI, 1.0f / PID_LOOP_FREQUENCY);
-    pid_init(&wrist.axis_b.pid, AXIS_B_KP, AXIS_B_KI, AXIS_B_KI, 1.0f / PID_LOOP_FREQUENCY);
+    pid_init(&wrist.axis_a.pid, AXIS_A_KP, AXIS_A_KI, AXIS_A_KI, AXIS_A_KF, 1.0f / PID_LOOP_FREQUENCY);
+    pid_init(&wrist.axis_b.pid, AXIS_B_KP, AXIS_B_KI, AXIS_B_KI, AXIS_B_KF, 1.0f / PID_LOOP_FREQUENCY);
 
-    bool ok1 = as5600_init(&wrist.axis_a.encoder, AS5600_A_I2C_PORT, AS5600_DEFAULT_ADDR, AS5600_A_VELOCITY_FILTER_ALPHA, AS5600_A_VELOCITY_DEADBAND, AS5600_A_SCALE_FACTOR, AS5600_A_DIRECTION, AS5600_A_ENABLE_NVS);
-    bool ok2 = as5600_init(&wrist.axis_b.encoder, AS5600_B_I2C_PORT, AS5600_DEFAULT_ADDR, AS5600_B_VELOCITY_FILTER_ALPHA, AS5600_B_VELOCITY_DEADBAND, AS5600_B_SCALE_FACTOR, AS5600_B_DIRECTION, AS5600_B_ENABLE_NVS);
+    bool ok1 = as5600_init(&wrist.axis_a.encoder, AS5600_A_I2C_PORT, AS5600_DEFAULT_ADDR, AS5600_A_VELOCITY_FILTER_ALPHA, AS5600_A_VELOCITY_DEADBAND, AS5600_A_SCALE_FACTOR, INVERT_AS5600_A, AS5600_A_ENABLE_NVS);
+    bool ok2 = as5600_init(&wrist.axis_b.encoder, AS5600_B_I2C_PORT, AS5600_DEFAULT_ADDR, AS5600_B_VELOCITY_FILTER_ALPHA, AS5600_B_VELOCITY_DEADBAND, AS5600_B_SCALE_FACTOR, INVERT_AS5600_B, AS5600_B_ENABLE_NVS);
 
     if (!ok1 || !ok2)
     {
@@ -440,14 +486,7 @@ void app_main(void)
         NULL,
         1);
 
-    xTaskCreatePinnedToCore(
-        homing_task,
-        "homing_task",
-        8192,
-        &homing_params,
-        5,
-        NULL,
-        0);
+    homing_task(&homing_params);
 
 #if defined(RMW_UXRCE_TRANSPORT_CUSTOM)
     rmw_uros_set_custom_transport(
@@ -461,6 +500,7 @@ void app_main(void)
 #error micro-ROS transports misconfigured
 #endif // RMW_UXRCE_TRANSPORT_CUSTOM
 
+    ESP_LOGI(TAG, "Starting micro ros");
     xTaskCreatePinnedToCore(
         micro_ros_task,
         "uros_task",

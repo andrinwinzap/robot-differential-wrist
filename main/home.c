@@ -65,7 +65,7 @@ void homing_task(void *pvParams)
                 {
                     params->wrist->axis_a.speed_ctrl = 0.0;
                     float coarse_pos = as5600_get_position(&params->wrist->axis_a.encoder);
-                    params->wrist->axis_a.pos_ctrl = coarse_pos - 0.01;
+                    params->wrist->axis_a.pos_ctrl = coarse_pos - 0.05;
                     ESP_LOGI(TAG, "A endstop (coarse) hit at %.4f", coarse_pos);
                     state = BACKING_OFF_A_ENDSTOP;
                 }
@@ -84,7 +84,7 @@ void homing_task(void *pvParams)
                 {
                     params->wrist->axis_a.speed_ctrl = 0.0;
                     as5600_set_position(&params->wrist->axis_a.encoder, ENDSTOP_A_POSITION);
-                    params->wrist->axis_a.pos_ctrl = A_AXIS_MAX + 0.01;
+                    params->wrist->axis_a.pos_ctrl = A_AXIS_MAX + 0.0;
                     ESP_LOGI(TAG, "A endstop (fine) hit, zeroed to %.4f", ENDSTOP_A_POSITION);
                     state = MOVING_TO_B_END;
                 }
@@ -142,8 +142,7 @@ void homing_task(void *pvParams)
                 break;
 
             case FINISHED:
-                // Optionally suspend task here
-                break;
+                return;
             }
         }
     }

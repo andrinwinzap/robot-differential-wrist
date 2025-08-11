@@ -35,7 +35,7 @@ static const char *axis_a_name = "joint_5";
 #define AS5600_A_VELOCITY_FILTER_ALPHA 0.1f
 #define AS5600_A_VELOCITY_DEADBAND 0.0f
 #define AS5600_A_SCALE_FACTOR 1.0f
-#define AS5600_A_DIRECTION -1
+#define INVERT_AS5600_A true
 #define AS5600_A_ENABLE_NVS true
 
 #define TB6612_A_IN1 GPIO_NUM_4
@@ -45,6 +45,7 @@ static const char *axis_a_name = "joint_5";
 #define AXIS_A_KP 3.0f
 #define AXIS_A_KI 0.0f
 #define AXIS_A_KD 0.0f
+#define AXIS_A_KF 3.0f
 
 // AXIS B
 static const char *axis_b_name = "joint_6";
@@ -60,12 +61,13 @@ static const char *axis_b_name = "joint_6";
 #define AS5600_B_VELOCITY_FILTER_ALPHA 0.1f
 #define AS5600_B_VELOCITY_DEADBAND 0.0f
 #define AS5600_B_SCALE_FACTOR 1.0f
-#define AS5600_B_DIRECTION -1
+#define INVERT_AS5600_B true
 #define AS5600_B_ENABLE_NVS true
 
 #define AXIS_B_KP 3.0f
 #define AXIS_B_KI 0.0f
 #define AXIS_B_KD 0.0f
+#define AXIS_B_KF 3.0f
 
 #define TB6612_B_IN1 GPIO_NUM_12
 #define TB6612_B_IN2 GPIO_NUM_13
