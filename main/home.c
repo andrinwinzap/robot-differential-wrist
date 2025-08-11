@@ -47,7 +47,7 @@ void homing_task(void *pvParams)
     ESP_LOGI(TAG, "Position Tolerance: %f", POSITION_TOLERANCE);
     float pos = params->wrist->axis_b.pos;
     dir = (pos < 0) - (pos > 0);
-    params->wrist->axis_b.pos_ctrl = -dir * 0.21f - ENDSTOP_B_POSITION;
+    params->wrist->axis_b.pos_ctrl = -dir * 0.5f - ENDSTOP_B_POSITION;
     while (true)
     {
         if (xSemaphoreTake(params->homing_semaphore, portMAX_DELAY) == pdTRUE)
@@ -65,7 +65,7 @@ void homing_task(void *pvParams)
                 {
                     params->wrist->axis_a.vel_ctrl = 0.0;
                     float coarse_pos = params->wrist->axis_a.pos;
-                    params->wrist->axis_a.pos_ctrl = coarse_pos - 0.05;
+                    params->wrist->axis_a.pos_ctrl = coarse_pos - 0.2;
                     ESP_LOGI(TAG, "A endstop (coarse) hit at %.4f", coarse_pos);
                     state = BACKING_OFF_A_ENDSTOP;
                 }
@@ -84,7 +84,7 @@ void homing_task(void *pvParams)
                 {
                     params->wrist->axis_a.vel_ctrl = 0.0;
                     as5600_set_position(&params->wrist->axis_a.encoder, ENDSTOP_A_POSITION);
-                    params->wrist->axis_a.pos_ctrl = A_AXIS_MAX + 0.0;
+                    params->wrist->axis_a.pos_ctrl = A_AXIS_MAX + 0.03;
                     ESP_LOGI(TAG, "A endstop (fine) hit, zeroed to %.4f", ENDSTOP_A_POSITION);
                     state = MOVING_TO_B_END;
                 }

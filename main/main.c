@@ -407,9 +407,9 @@ void pid_loop_task(void *param)
 
             if ((now_us - last_log_us) >= PID_LOG_INTERVAL_US)
             {
-                ESP_LOGD(TAG,
+                ESP_LOGI(TAG,
                          "PID Freq: %.2f Hz | Loop: %.0f us | "
-                         "A: vel_meas=%.4f vel_ctrl=%.4f PWM=%.4f\n"
+                         "A: vel_meas=%.4f vel_ctrl=%.4f PWM=%.4f"
                          "B: vel_meas=%.4f vel_ctrl=%.4f PWM=%.4f",
                          pid_freq, loop_time_us,
                          diff_vel_feedback, diff_vel_sig, diff_pwm_sig,
@@ -492,25 +492,25 @@ void app_main(void)
 
     homing_task(&homing_params);
 
-    // #if defined(RMW_UXRCE_TRANSPORT_CUSTOM)
-    //     rmw_uros_set_custom_transport(
-    //         true,
-    //         (void *)&uart_port,
-    //         esp32_serial_open,
-    //         esp32_serial_close,
-    //         esp32_serial_write,
-    //         esp32_serial_read);
-    // #else
-    // #error micro-ROS transports misconfigured
-    // #endif // RMW_UXRCE_TRANSPORT_CUSTOM
+#if defined(RMW_UXRCE_TRANSPORT_CUSTOM)
+    rmw_uros_set_custom_transport(
+        true,
+        (void *)&uart_port,
+        esp32_serial_open,
+        esp32_serial_close,
+        esp32_serial_write,
+        esp32_serial_read);
+#else
+#error micro-ROS transports misconfigured
+#endif // RMW_UXRCE_TRANSPORT_CUSTOM
 
     ESP_LOGI(TAG, "Starting micro ros");
-    //     xTaskCreatePinnedToCore(
-    //         micro_ros_task,
-    //         "uros_task",
-    //         16384,
-    //         NULL,
-    //         5,
-    //         NULL,
-    //         0);
+    xTaskCreatePinnedToCore(
+        micro_ros_task,
+        "uros_task",
+        16384,
+        NULL,
+        5,
+        NULL,
+        0);
 }
