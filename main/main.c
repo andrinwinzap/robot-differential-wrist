@@ -96,7 +96,7 @@ void axis_a_command_subscriber_callback(const void *msgin)
     wrist.axis_a.pos_ctrl = pos;
 
     float vel = msg->data.data[1];
-    wrist.axis_a.speed_ctrl = vel;
+    wrist.axis_a.vel_ctrl = vel;
 }
 
 void axis_b_command_subscriber_callback(const void *msgin)
@@ -120,7 +120,7 @@ void axis_b_command_subscriber_callback(const void *msgin)
     wrist.axis_b.pos_ctrl = pos;
 
     float vel = msg->data.data[1];
-    wrist.axis_b.speed_ctrl = vel;
+    wrist.axis_b.vel_ctrl = vel;
 }
 
 float axis_a_get_position(void)
@@ -223,12 +223,12 @@ void timer_callback(rcl_timer_t *timer, int64_t last_call_time)
     RCLC_UNUSED(last_call_time);
     if (timer != NULL)
     {
-        axis_a_state_publisher_msg.data.data[0] = axis_a_get_position();
-        axis_a_state_publisher_msg.data.data[1] = as5600_get_velocity(&wrist.axis_a.encoder);
+        axis_a_state_publisher_msg.data.data[0] = wrist.axis_a.pos;
+        axis_a_state_publisher_msg.data.data[1] = wrist.axis_a.vel;
         RCSOFTCHECK(rcl_publish(&axis_a_state_publisher, &axis_a_state_publisher_msg, NULL));
 
-        axis_b_state_publisher_msg.data.data[0] = axis_b_get_position();
-        axis_b_state_publisher_msg.data.data[1] = as5600_get_velocity(&wrist.axis_b.encoder);
+        axis_b_state_publisher_msg.data.data[0] = wrist.axis_b.pos;
+        axis_b_state_publisher_msg.data.data[1] = wrist.axis_b.vel;
         RCSOFTCHECK(rcl_publish(&axis_b_state_publisher, &axis_b_state_publisher_msg, NULL));
     }
 }
@@ -332,20 +332,29 @@ void pid_loop_task(void *param)
     float dt_s = 1.0f / PID_LOOP_FREQUENCY;
     const int64_t PID_LOG_INTERVAL_US = (int64_t)(1000000.0f / PID_LOG_FREQUENCY_HZ);
 
-    double measured_pid_frequency = 0.0;
-    double measured_loop_time_us = 0.0; // Changed to microseconds
+    double pid_freq = 0.0;
+    double loop_time_us = 0.0; // Changed to microseconds
     int64_t last_us = 0;
     int64_t last_log_us = 0;
 
-    static float prev_position_a = 0.0f;
-    static float prev_position_b = 0.0f;
-
-    unsigned long change_count_a = 0;
-    unsigned long change_count_b = 0;
-    unsigned long total_updates_a = 0;
-    unsigned long total_updates_b = 0;
-
     const float POSITION_EPSILON = 1e-6f;
+
+    float diff_pos_feedback;
+    float diff_pos_delta;
+    float diff_vel_feedback = 0;
+    float diff_vel_sig;
+    float diff_pwm_sig;
+
+    float comm_vel_sig;
+    float comm_pos_delta;
+    float comm_pwm_sig;
+    float comm_pos_feedback;
+    float comm_vel_feedback = 0;
+
+    as5600_update(&wrist.axis_a.encoder);
+    wrist.axis_a.pos = as5600_get_position(&wrist.axis_a.encoder);
+    as5600_update(&wrist.axis_b.encoder);
+    wrist.axis_b.pos = as5600_get_position(&wrist.axis_b.encoder);
 
     for (;;)
     {
@@ -353,65 +362,58 @@ void pid_loop_task(void *param)
         {
             int64_t loop_start_us = esp_timer_get_time();
 
-            wrist.axis_a.pos_ctrl += wrist.axis_a.speed_ctrl * dt_s;
-            wrist.axis_b.pos_ctrl += wrist.axis_b.speed_ctrl * dt_s;
-
+            // Feedback
             as5600_update(&wrist.axis_a.encoder);
+            diff_pos_feedback = as5600_get_position(&wrist.axis_a.encoder);
+            diff_pos_delta = diff_pos_feedback - wrist.axis_a.pos;
+            diff_vel_feedback = AS5600_A_VELOCITY_FILTER_ALPHA * (diff_pos_delta / dt_s) + (1 - AS5600_A_VELOCITY_FILTER_ALPHA) * diff_vel_feedback;
+            wrist.axis_a.pos = diff_pos_feedback;
+            wrist.axis_a.vel = diff_vel_feedback;
+
             as5600_update(&wrist.axis_b.encoder);
+            comm_pos_feedback = as5600_get_position(&wrist.axis_b.encoder);
+            comm_pos_delta = comm_pos_feedback - wrist.axis_b.pos;
+            comm_vel_feedback = AS5600_B_VELOCITY_FILTER_ALPHA * (comm_pos_delta / dt_s) + (1 - AS5600_B_VELOCITY_FILTER_ALPHA) * comm_vel_feedback;
+            wrist.axis_b.pos = comm_pos_feedback;
+            wrist.axis_b.vel = comm_vel_feedback;
 
-            // Differential (A)
-            float differential_position_measured = as5600_get_position(&wrist.axis_a.encoder);
-            total_updates_a++;
-            if (fabsf(differential_position_measured - prev_position_a) >= POSITION_EPSILON)
-                change_count_a++;
-            prev_position_a = differential_position_measured;
+            // ESP_LOGI(TAG, "diff_pos_delta: %f comm_pos_delta: %f", diff_pos_delta, comm_pos_delta);
+            //    Differential (A)
+            diff_vel_sig = pid_update(&wrist.axis_a.pos_pid, wrist.axis_a.pos_ctrl, diff_pos_feedback, wrist.axis_a.vel_ctrl);
+            diff_pwm_sig = pid_update(&wrist.axis_a.vel_pid, diff_vel_sig, diff_vel_feedback, diff_vel_sig);
 
-            float differential_control_signal = pid_update(&wrist.axis_a.pid, wrist.axis_a.pos_ctrl, differential_position_measured, wrist.axis_a.speed_ctrl);
-            if (fabsf(differential_control_signal) < CTRL_SIGNAL_THRESHOLD)
-                differential_control_signal = 0.0f;
-            set_differential_speed(&wrist.diff_speed_ctrl, differential_control_signal);
+            set_diff_pwm(&wrist.diff_pwm_ctrl, diff_pwm_sig);
 
             // Common (B)
-            float common_position_measured = as5600_get_position(&wrist.axis_b.encoder);
-            total_updates_b++;
-            if (fabsf(common_position_measured - prev_position_b) >= POSITION_EPSILON)
-                change_count_b++;
-            prev_position_b = common_position_measured;
+            comm_vel_sig = pid_update(&wrist.axis_b.pos_pid, wrist.axis_b.pos_ctrl, comm_pos_feedback, wrist.axis_b.vel_ctrl);
+            comm_pwm_sig = pid_update(&wrist.axis_b.vel_pid, comm_vel_sig, comm_vel_feedback, comm_vel_sig);
 
-            float common_control_signal = pid_update(&wrist.axis_b.pid, wrist.axis_b.pos_ctrl, common_position_measured, wrist.axis_b.speed_ctrl);
-            if (fabsf(common_control_signal) < CTRL_SIGNAL_THRESHOLD)
-                common_control_signal = 0.0f;
-            set_common_speed(&wrist.diff_speed_ctrl, common_control_signal);
+            set_comm_pwm(&wrist.diff_pwm_ctrl, comm_pwm_sig);
+
+            // Update Positions
+            wrist.axis_a.pos_ctrl += wrist.axis_a.vel_ctrl * dt_s;
+            wrist.axis_b.pos_ctrl += wrist.axis_b.vel_ctrl * dt_s;
 
             int64_t now_us = esp_timer_get_time();
-            float loop_time_us = (float)(now_us - loop_start_us); // Microseconds
-            measured_loop_time_us = PID_LOOP_TIME_ALPHA * loop_time_us + (1.0f - PID_LOOP_TIME_ALPHA) * measured_loop_time_us;
+            loop_time_us = PID_LOOP_TIME_ALPHA * (float)(now_us - loop_start_us) + (1.0f - PID_LOOP_TIME_ALPHA) * loop_time_us;
 
             if (last_us > 0)
             {
                 float time_between_loops_ms = (now_us - last_us) / 1000.0f;
                 float current_frequency = 1000.0f / time_between_loops_ms;
-                measured_pid_frequency = PID_FREQ_ALPHA * current_frequency + (1.0f - PID_FREQ_ALPHA) * measured_pid_frequency;
+                pid_freq = PID_FREQ_ALPHA * current_frequency + (1.0f - PID_FREQ_ALPHA) * pid_freq;
             }
             last_us = now_us;
 
             if ((now_us - last_log_us) >= PID_LOG_INTERVAL_US)
             {
-                float change_percent_a = total_updates_a ? (100.0f * change_count_a / total_updates_a) : 0.0f;
-                float change_percent_b = total_updates_b ? (100.0f * change_count_b / total_updates_b) : 0.0f;
-
                 ESP_LOGD(TAG,
-                         "PID Freq: %.2f Hz | Loop Time: %.0f us | "
-                         "Ctrl A: %.4f | Ctrl B: %.4f | "
-                         "Enc A Δ: %.2f%% | Enc B Δ: %.2f%%",
-                         measured_pid_frequency, measured_loop_time_us,
-                         differential_control_signal, common_control_signal,
-                         change_percent_a, change_percent_b);
-
-                change_count_a = 0;
-                change_count_b = 0;
-                total_updates_a = 0;
-                total_updates_b = 0;
+                         "PID Freq: %.2f Hz | Loop: %.0f us | "
+                         "A: vel_meas=%.4f vel_ctrl=%.4f PWM=%.4f\n"
+                         "B: vel_meas=%.4f vel_ctrl=%.4f PWM=%.4f",
+                         pid_freq, loop_time_us,
+                         diff_vel_feedback, diff_vel_sig, diff_pwm_sig,
+                         comm_vel_feedback, comm_vel_sig, comm_pwm_sig);
                 last_log_us = now_us;
             }
         }
@@ -445,23 +447,25 @@ void app_main(void)
     tb6612_motor_init(&wrist.motor_2, TB6612_B_IN1, TB6612_B_IN2, TB6612_B_PWM, MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_A);
 
     wrist.axis_a.pos_ctrl = 0.0f;
-    wrist.axis_a.speed_ctrl = 0.0f;
+    wrist.axis_a.vel_ctrl = 0.0f;
 
     wrist.axis_b.pos_ctrl = 0.0f;
-    wrist.axis_b.speed_ctrl = 0.0f;
+    wrist.axis_b.vel_ctrl = 0.0f;
 
-    wrist.diff_speed_ctrl.cb1 = &motor1_cb;
-    wrist.diff_speed_ctrl.cb2 = &motor2_cb;
-    wrist.diff_speed_ctrl.gear_ratio = COMMON_GEAR_RATIO;
+    wrist.diff_pwm_ctrl.cb1 = &motor1_cb;
+    wrist.diff_pwm_ctrl.cb2 = &motor2_cb;
+    wrist.diff_pwm_ctrl.gear_ratio = COMMON_GEAR_RATIO;
 
-    wrist.diff_speed_ctrl.common_speed = 0.0f;
-    wrist.diff_speed_ctrl.differential_speed = 0.0f;
+    wrist.diff_pwm_ctrl.common_speed = 0.0f;
+    wrist.diff_pwm_ctrl.differential_speed = 0.0f;
 
-    pid_init(&wrist.axis_a.pid, AXIS_A_KP, AXIS_A_KI, AXIS_A_KI, AXIS_A_KF, 1.0f / PID_LOOP_FREQUENCY);
-    pid_init(&wrist.axis_b.pid, AXIS_B_KP, AXIS_B_KI, AXIS_B_KI, AXIS_B_KF, 1.0f / PID_LOOP_FREQUENCY);
+    pid_init(&wrist.axis_a.pos_pid, AXIS_A_POSITION_KP, AXIS_A_POSITION_KI, AXIS_A_POSITION_KD, AXIS_A_POSITION_KF, 1.0f / PID_LOOP_FREQUENCY);
+    pid_init(&wrist.axis_b.pos_pid, AXIS_B_POSITION_KP, AXIS_B_POSITION_KI, AXIS_B_POSITION_KD, AXIS_B_POSITION_KF, 1.0f / PID_LOOP_FREQUENCY);
+    pid_init(&wrist.axis_a.vel_pid, AXIS_A_VELOCITY_KP, AXIS_A_VELOCITY_KI, AXIS_A_VELOCITY_KD, AXIS_A_VELOCITY_KF, 1.0f / PID_LOOP_FREQUENCY);
+    pid_init(&wrist.axis_b.vel_pid, AXIS_B_VELOCITY_KP, AXIS_B_VELOCITY_KI, AXIS_B_VELOCITY_KD, AXIS_B_VELOCITY_KF, 1.0f / PID_LOOP_FREQUENCY);
 
-    bool ok1 = as5600_init(&wrist.axis_a.encoder, AS5600_A_I2C_PORT, AS5600_DEFAULT_ADDR, AS5600_A_VELOCITY_FILTER_ALPHA, AS5600_A_VELOCITY_DEADBAND, AS5600_A_SCALE_FACTOR, INVERT_AS5600_A, AS5600_A_ENABLE_NVS);
-    bool ok2 = as5600_init(&wrist.axis_b.encoder, AS5600_B_I2C_PORT, AS5600_DEFAULT_ADDR, AS5600_B_VELOCITY_FILTER_ALPHA, AS5600_B_VELOCITY_DEADBAND, AS5600_B_SCALE_FACTOR, INVERT_AS5600_B, AS5600_B_ENABLE_NVS);
+    bool ok1 = as5600_init(&wrist.axis_a.encoder, AS5600_A_I2C_PORT, AS5600_DEFAULT_ADDR, AS5600_A_SCALE_FACTOR, INVERT_AS5600_A, AS5600_A_ENABLE_NVS);
+    bool ok2 = as5600_init(&wrist.axis_b.encoder, AS5600_B_I2C_PORT, AS5600_DEFAULT_ADDR, AS5600_B_SCALE_FACTOR, INVERT_AS5600_B, AS5600_B_ENABLE_NVS);
 
     if (!ok1 || !ok2)
     {
@@ -488,25 +492,25 @@ void app_main(void)
 
     homing_task(&homing_params);
 
-#if defined(RMW_UXRCE_TRANSPORT_CUSTOM)
-    rmw_uros_set_custom_transport(
-        true,
-        (void *)&uart_port,
-        esp32_serial_open,
-        esp32_serial_close,
-        esp32_serial_write,
-        esp32_serial_read);
-#else
-#error micro-ROS transports misconfigured
-#endif // RMW_UXRCE_TRANSPORT_CUSTOM
+    // #if defined(RMW_UXRCE_TRANSPORT_CUSTOM)
+    //     rmw_uros_set_custom_transport(
+    //         true,
+    //         (void *)&uart_port,
+    //         esp32_serial_open,
+    //         esp32_serial_close,
+    //         esp32_serial_write,
+    //         esp32_serial_read);
+    // #else
+    // #error micro-ROS transports misconfigured
+    // #endif // RMW_UXRCE_TRANSPORT_CUSTOM
 
     ESP_LOGI(TAG, "Starting micro ros");
-    xTaskCreatePinnedToCore(
-        micro_ros_task,
-        "uros_task",
-        16384,
-        NULL,
-        5,
-        NULL,
-        0);
+    //     xTaskCreatePinnedToCore(
+    //         micro_ros_task,
+    //         "uros_task",
+    //         16384,
+    //         NULL,
+    //         5,
+    //         NULL,
+    //         0);
 }

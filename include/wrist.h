@@ -8,10 +8,13 @@
 
 typedef struct
 {
-    float pos_ctrl;
-    float speed_ctrl;
+    volatile float pos;
+    volatile float vel;
+    volatile float pos_ctrl;
+    volatile float vel_ctrl;
     as5600_t encoder;
-    pid_controller_t pid;
+    pid_controller_t vel_pid;
+    pid_controller_t pos_pid;
 } axis_t;
 
 typedef struct
@@ -20,7 +23,7 @@ typedef struct
     axis_t axis_b;
     tb6612_motor_t motor_1;
     tb6612_motor_t motor_2;
-    diff_speed_ctrl_t diff_speed_ctrl;
+    diff_speed_ctrl_t diff_pwm_ctrl;
 } wrist_t;
 
 #endif // WRIST_H

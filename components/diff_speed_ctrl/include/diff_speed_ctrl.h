@@ -12,9 +12,9 @@ typedef struct
     float differential_speed;
 } diff_speed_ctrl_t;
 
-void set_common_speed(diff_speed_ctrl_t *ctrl, float speed);
+void set_comm_pwm(diff_speed_ctrl_t *ctrl, float speed);
 
-void set_differential_speed(diff_speed_ctrl_t *ctrl, float speed);
+void set_diff_pwm(diff_speed_ctrl_t *ctrl, float speed);
 
 void update_outputs(diff_speed_ctrl_t *ctrl);
 

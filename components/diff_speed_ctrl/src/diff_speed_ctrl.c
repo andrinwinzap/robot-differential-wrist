@@ -22,13 +22,13 @@ void update_outputs(diff_speed_ctrl_t *ctrl)
         ctrl->cb2(speed2);
 }
 
-void set_common_speed(diff_speed_ctrl_t *ctrl, float speed)
+void set_comm_pwm(diff_speed_ctrl_t *ctrl, float speed)
 {
     ctrl->common_speed = speed;
     update_outputs(ctrl);
 }
 
-void set_differential_speed(diff_speed_ctrl_t *ctrl, float speed)
+void set_diff_pwm(diff_speed_ctrl_t *ctrl, float speed)
 {
     ctrl->differential_speed = speed;
     update_outputs(ctrl);
