@@ -56,7 +56,7 @@ static const char *axis_b_name = "joint_6";
 
 #define ENDSTOP_B_PIN GPIO_NUM_8
 #define B_AXIS_MAX M_PI
-#define B_AXIS_MIN 0
+#define B_AXIS_MIN -M_PI
 #define ENDSTOP_B_POSITION M_PI / 9.0f
 
 #define AS5600_B_I2C_PORT I2C_NUM_1

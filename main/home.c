@@ -125,7 +125,7 @@ void homing_task(void *pvParams)
 
                     float calibrated = (falling_edge - rising_edge) / 2.0f + ENDSTOP_B_POSITION;
                     as5600_set_position(&params->wrist->axis_b.encoder, calibrated);
-
+                    params->wrist->axis_b.pos = calibrated;
                     params->wrist->axis_a.pos_ctrl = 0.0f;
                     params->wrist->axis_b.pos_ctrl = 0.0f;
 
