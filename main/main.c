@@ -235,6 +235,7 @@ void timer_callback(rcl_timer_t *timer, int64_t last_call_time)
 
 void micro_ros_task(void *arg)
 {
+try_uros_task:
     rcl_allocator_t allocator = rcl_get_default_allocator();
     rclc_support_t support;
 
@@ -407,7 +408,7 @@ void pid_loop_task(void *param)
 
             if ((now_us - last_log_us) >= PID_LOG_INTERVAL_US)
             {
-                ESP_LOGI(TAG,
+                ESP_LOGD(TAG,
                          "PID Freq: %.2f Hz | Loop: %.0f us | "
                          "A: vel_meas=%.4f vel_ctrl=%.4f PWM=%.4f"
                          "B: vel_meas=%.4f vel_ctrl=%.4f PWM=%.4f",
