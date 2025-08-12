@@ -28,6 +28,7 @@ static const char *axis_a_name = "joint_5";
 #define A_AXIS_MAX M_PI / 2.0f - 0.03
 #define A_AXIS_MIN -M_PI / 2.0f + 0.03
 #define ENDSTOP_A_POSITION A_AXIS_MAX - 0.01
+#define AXIS_A_MAX_SPEED 1.7f
 
 #define AS5600_A_I2C_PORT I2C_NUM_0
 #define AS5600_A_I2C_SDA 18
@@ -47,7 +48,7 @@ static const char *axis_a_name = "joint_5";
 #define AXIS_A_POSITION_KF 1.0f
 
 #define AXIS_A_VELOCITY_KP 1.0f
-#define AXIS_A_VELOCITY_KI 2.0f
+#define AXIS_A_VELOCITY_KI 5.0f
 #define AXIS_A_VELOCITY_KD 0.0f
 #define AXIS_A_VELOCITY_KF 0.4f
 
@@ -58,6 +59,7 @@ static const char *axis_b_name = "joint_6";
 #define B_AXIS_MAX M_PI
 #define B_AXIS_MIN -M_PI
 #define ENDSTOP_B_POSITION M_PI / 9.0f
+#define AXIS_B_MAX_SPEED 1.7f
 
 #define AS5600_B_I2C_PORT I2C_NUM_1
 #define AS5600_B_I2C_SDA 10
@@ -67,13 +69,13 @@ static const char *axis_b_name = "joint_6";
 #define INVERT_AS5600_B true
 #define AS5600_B_ENABLE_NVS true
 
-#define AXIS_B_POSITION_KP 2.0f
-#define AXIS_B_POSITION_KI .0f
+#define AXIS_B_POSITION_KP 1.0f
+#define AXIS_B_POSITION_KI 0.0f
 #define AXIS_B_POSITION_KD 0.0f
 #define AXIS_B_POSITION_KF 1.0f
 
-#define AXIS_B_VELOCITY_KP 2.0f
-#define AXIS_B_VELOCITY_KI 2.0f
+#define AXIS_B_VELOCITY_KP 1.0f
+#define AXIS_B_VELOCITY_KI 5.0f
 #define AXIS_B_VELOCITY_KD 0.0f
 #define AXIS_B_VELOCITY_KF 0.4f
 

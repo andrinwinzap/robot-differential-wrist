@@ -407,7 +407,7 @@ void pid_loop_task(void *param)
 
             if ((now_us - last_log_us) >= PID_LOG_INTERVAL_US)
             {
-                ESP_LOGD(TAG,
+                ESP_LOGI(TAG,
                          "PID Freq: %.2f Hz | Loop: %.0f us | "
                          "A: vel_meas=%.4f vel_ctrl=%.4f PWM=%.4f"
                          "B: vel_meas=%.4f vel_ctrl=%.4f PWM=%.4f",
@@ -459,10 +459,10 @@ void app_main(void)
     wrist.diff_pwm_ctrl.common_speed = 0.0f;
     wrist.diff_pwm_ctrl.differential_speed = 0.0f;
 
-    pid_init(&wrist.axis_a.pos_pid, AXIS_A_POSITION_KP, AXIS_A_POSITION_KI, AXIS_A_POSITION_KD, AXIS_A_POSITION_KF, 1.0f / PID_LOOP_FREQUENCY);
-    pid_init(&wrist.axis_b.pos_pid, AXIS_B_POSITION_KP, AXIS_B_POSITION_KI, AXIS_B_POSITION_KD, AXIS_B_POSITION_KF, 1.0f / PID_LOOP_FREQUENCY);
-    pid_init(&wrist.axis_a.vel_pid, AXIS_A_VELOCITY_KP, AXIS_A_VELOCITY_KI, AXIS_A_VELOCITY_KD, AXIS_A_VELOCITY_KF, 1.0f / PID_LOOP_FREQUENCY);
-    pid_init(&wrist.axis_b.vel_pid, AXIS_B_VELOCITY_KP, AXIS_B_VELOCITY_KI, AXIS_B_VELOCITY_KD, AXIS_B_VELOCITY_KF, 1.0f / PID_LOOP_FREQUENCY);
+    pid_init(&wrist.axis_a.pos_pid, AXIS_A_POSITION_KP, AXIS_A_POSITION_KI, AXIS_A_POSITION_KD, AXIS_A_POSITION_KF, AXIS_A_MAX_SPEED, 1.0f / PID_LOOP_FREQUENCY);
+    pid_init(&wrist.axis_b.pos_pid, AXIS_B_POSITION_KP, AXIS_B_POSITION_KI, AXIS_B_POSITION_KD, AXIS_B_POSITION_KF, AXIS_B_MAX_SPEED, 1.0f / PID_LOOP_FREQUENCY);
+    pid_init(&wrist.axis_a.vel_pid, AXIS_A_VELOCITY_KP, AXIS_A_VELOCITY_KI, AXIS_A_VELOCITY_KD, AXIS_A_VELOCITY_KF, 1.0f, 1.0f / PID_LOOP_FREQUENCY);
+    pid_init(&wrist.axis_b.vel_pid, AXIS_B_VELOCITY_KP, AXIS_B_VELOCITY_KI, AXIS_B_VELOCITY_KD, AXIS_B_VELOCITY_KF, 1.0f, 1.0f / PID_LOOP_FREQUENCY);
 
     bool ok1 = as5600_init(&wrist.axis_a.encoder, AS5600_A_I2C_PORT, AS5600_DEFAULT_ADDR, AS5600_A_SCALE_FACTOR, INVERT_AS5600_A, AS5600_A_ENABLE_NVS);
     bool ok2 = as5600_init(&wrist.axis_b.encoder, AS5600_B_I2C_PORT, AS5600_DEFAULT_ADDR, AS5600_B_SCALE_FACTOR, INVERT_AS5600_B, AS5600_B_ENABLE_NVS);
