@@ -24,10 +24,10 @@
 #include "tb6612.h"
 #include "diff_speed_ctrl.h"
 #include "pid.h"
-#include "home.h"
 #include "macros.h"
 #include "config.h"
 #include "wrist.h"
+#include "home.h"
 
 #define TOPIC_BUFFER_SIZE 64
 #define COMMAND_BUFFER_LEN 2
@@ -92,7 +92,7 @@ void init_control_timer()
     ESP_ERROR_CHECK(gptimer_register_event_callbacks(control_timer, &callbacks, NULL));
 
     gptimer_alarm_config_t alarm_config = {
-        .alarm_count = 1000000 / PID_LOOP_FREQUENCY,
+        .alarm_count = 1000000 / PID_LOOP_FREQUENCY_HZ,
         .reload_count = 0,
         .flags.auto_reload_on_alarm = true,
     };
@@ -153,7 +153,7 @@ void motor2_cb(float speed)
 
 void pid_loop_task(void *param)
 {
-    float dt_s = 1.0f / PID_LOOP_FREQUENCY;
+    float dt_s = 1.0f / PID_LOOP_FREQUENCY_HZ;
     const int64_t PID_LOG_INTERVAL_US = (int64_t)(1000000.0f / PID_LOG_FREQUENCY_HZ);
 
     double pid_freq = 0.0;
@@ -266,13 +266,13 @@ void axis_a_command_subscriber_callback(const void *msgin)
     }
 
     float pos = msg->data.data[0];
-    if (pos > A_AXIS_MAX)
+    if (pos > AXIS_A_MAX)
     {
-        pos = A_AXIS_MAX;
+        pos = AXIS_A_MAX;
     }
-    else if (pos < A_AXIS_MIN)
+    else if (pos < AXIS_A_MIN)
     {
-        pos = A_AXIS_MIN;
+        pos = AXIS_A_MIN;
     }
     wrist.axis_a.pos_ctrl = pos;
 
@@ -290,13 +290,13 @@ void axis_b_command_subscriber_callback(const void *msgin)
     }
 
     float pos = msg->data.data[0];
-    if (pos > B_AXIS_MAX)
+    if (pos > AXIS_B_MAX)
     {
-        pos = B_AXIS_MAX;
+        pos = AXIS_B_MAX;
     }
-    else if (pos < B_AXIS_MIN)
+    else if (pos < AXIS_B_MIN)
     {
-        pos = B_AXIS_MIN;
+        pos = AXIS_B_MIN;
     }
     wrist.axis_b.pos_ctrl = pos;
 
@@ -403,10 +403,10 @@ void app_main(void)
 {
     ESP_LOGI(TAG, "Starting Setup...");
 
-    snprintf(axis_a_state_publisher_topic, TOPIC_BUFFER_SIZE, "/%s/%s/get_state", robot_name, axis_a_name);
-    snprintf(axis_a_command_subscriber_topic, TOPIC_BUFFER_SIZE, "/%s/%s/send_command", robot_name, axis_a_name);
-    snprintf(axis_b_state_publisher_topic, TOPIC_BUFFER_SIZE, "/%s/%s/get_state", robot_name, axis_b_name);
-    snprintf(axis_b_command_subscriber_topic, TOPIC_BUFFER_SIZE, "/%s/%s/send_command", robot_name, axis_b_name);
+    snprintf(axis_a_state_publisher_topic, TOPIC_BUFFER_SIZE, "/%s/%s/get_state", ROBOT_NAME, AXIS_A_NAME);
+    snprintf(axis_a_command_subscriber_topic, TOPIC_BUFFER_SIZE, "/%s/%s/send_command", ROBOT_NAME, AXIS_A_NAME);
+    snprintf(axis_b_state_publisher_topic, TOPIC_BUFFER_SIZE, "/%s/%s/get_state", ROBOT_NAME, AXIS_B_NAME);
+    snprintf(axis_b_command_subscriber_topic, TOPIC_BUFFER_SIZE, "/%s/%s/send_command", ROBOT_NAME, AXIS_B_NAME);
 
     pid_semaphore = xSemaphoreCreateBinary();
     homing_semaphore = xSemaphoreCreateBinary();
@@ -431,15 +431,15 @@ void app_main(void)
 
     wrist.diff_pwm_ctrl.cb1 = &motor1_cb;
     wrist.diff_pwm_ctrl.cb2 = &motor2_cb;
-    wrist.diff_pwm_ctrl.gear_ratio = COMMON_GEAR_RATIO;
+    wrist.diff_pwm_ctrl.gear_ratio = GEAR_RATIO;
 
     wrist.diff_pwm_ctrl.common_speed = 0.0f;
     wrist.diff_pwm_ctrl.differential_speed = 0.0f;
 
-    pid_init(&wrist.axis_a.pos_pid, AXIS_A_POSITION_KP, AXIS_A_POSITION_KI, AXIS_A_POSITION_KD, AXIS_A_POSITION_KF, AXIS_A_MAX_SPEED, 1.0f / PID_LOOP_FREQUENCY);
-    pid_init(&wrist.axis_b.pos_pid, AXIS_B_POSITION_KP, AXIS_B_POSITION_KI, AXIS_B_POSITION_KD, AXIS_B_POSITION_KF, AXIS_B_MAX_SPEED, 1.0f / PID_LOOP_FREQUENCY);
-    pid_init(&wrist.axis_a.vel_pid, AXIS_A_VELOCITY_KP, AXIS_A_VELOCITY_KI, AXIS_A_VELOCITY_KD, AXIS_A_VELOCITY_KF, 1.0f, 1.0f / PID_LOOP_FREQUENCY);
-    pid_init(&wrist.axis_b.vel_pid, AXIS_B_VELOCITY_KP, AXIS_B_VELOCITY_KI, AXIS_B_VELOCITY_KD, AXIS_B_VELOCITY_KF, 1.0f, 1.0f / PID_LOOP_FREQUENCY);
+    pid_init(&wrist.axis_a.pos_pid, AXIS_A_POSITION_KP, AXIS_A_POSITION_KI, AXIS_A_POSITION_KD, AXIS_A_POSITION_KF, AXIS_A_MAX_SPEED, 1.0f / PID_LOOP_FREQUENCY_HZ);
+    pid_init(&wrist.axis_b.pos_pid, AXIS_B_POSITION_KP, AXIS_B_POSITION_KI, AXIS_B_POSITION_KD, AXIS_B_POSITION_KF, AXIS_B_MAX_SPEED, 1.0f / PID_LOOP_FREQUENCY_HZ);
+    pid_init(&wrist.axis_a.vel_pid, AXIS_A_VELOCITY_KP, AXIS_A_VELOCITY_KI, AXIS_A_VELOCITY_KD, AXIS_A_VELOCITY_KF, 1.0f, 1.0f / PID_LOOP_FREQUENCY_HZ);
+    pid_init(&wrist.axis_b.vel_pid, AXIS_B_VELOCITY_KP, AXIS_B_VELOCITY_KI, AXIS_B_VELOCITY_KD, AXIS_B_VELOCITY_KF, 1.0f, 1.0f / PID_LOOP_FREQUENCY_HZ);
 
     bool ok1 = as5600_init(&wrist.axis_a.encoder, AS5600_A_I2C_PORT, AS5600_DEFAULT_ADDR, AS5600_A_SCALE_FACTOR, INVERT_AS5600_A, AS5600_A_ENABLE_NVS);
     bool ok2 = as5600_init(&wrist.axis_b.encoder, AS5600_B_I2C_PORT, AS5600_DEFAULT_ADDR, AS5600_B_SCALE_FACTOR, INVERT_AS5600_B, AS5600_B_ENABLE_NVS);

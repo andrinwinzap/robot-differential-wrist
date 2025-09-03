@@ -85,7 +85,7 @@ void homing_task(void *pvParams)
                     params->wrist->axis_a.vel_ctrl = 0.0;
                     as5600_set_position(&params->wrist->axis_a.encoder, ENDSTOP_A_POSITION);
                     params->wrist->axis_a.pos = ENDSTOP_A_POSITION;
-                    params->wrist->axis_a.pos_ctrl = A_AXIS_MAX + 0.03;
+                    params->wrist->axis_a.pos_ctrl = AXIS_A_MAX + 0.03;
                     ESP_LOGI(TAG, "A endstop (fine) hit, zeroed to %.4f", ENDSTOP_A_POSITION);
                     state = MOVING_TO_B_END;
                 }
