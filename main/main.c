@@ -1,42 +1,33 @@
 #include <string.h>
 #include <stdio.h>
 #include <unistd.h>
-
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
-
-#include <rcl/rcl.h>
-#include <rcl/error_handling.h>
-#include <std_msgs/msg/float32.h>
-#include <std_msgs/msg/float32_multi_array.h>
-#include <std_msgs/msg/bool.h>
-#include <rclc/rclc.h>
-#include <rclc/executor.h>
-
-#include <rmw_microxrcedds_c/config.h>
-#include <rmw_microros/rmw_microros.h>
-#include "esp32_serial_transport.h"
-
+#include "driver/uart.h"
 #include "driver/gpio.h"
 #include "driver/i2c.h"
 #include "driver/gptimer.h"
-#include "driver/uart.h"
-
+#include <rcl/rcl.h>
+#include <rcl/error_handling.h>
+#include <std_msgs/msg/float32_multi_array.h>
+#include <rclc/rclc.h>
+#include <rclc/executor.h>
+#include <rmw_microxrcedds_c/config.h>
+#include <rmw_microros/rmw_microros.h>
+#include "esp32_serial_transport.h"
 #include "nvs_flash.h"
-
 #include "as5600.h"
 #include "tb6612.h"
 #include "diff_speed_ctrl.h"
 #include "pid.h"
-
 #include "home.h"
+#include "macros.h"
 #include "config.h"
 #include "wrist.h"
-#include "macros.h"
 
 #define TOPIC_BUFFER_SIZE 64
 #define COMMAND_BUFFER_LEN 2
@@ -65,15 +56,205 @@ static float axis_b_command_buffer[COMMAND_BUFFER_LEN];
 SemaphoreHandle_t pid_semaphore;
 SemaphoreHandle_t homing_semaphore;
 
+static gptimer_handle_t control_timer = NULL;
+
+static size_t uart_port = UART_NUM_1;
+
 wrist_t wrist;
 
 static homing_params_t homing_params;
 
 static const char *TAG = "Wrist";
 
-static size_t uart_port = UART_NUM_1;
+bool IRAM_ATTR gptimer_callback(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_data)
+{
+    BaseType_t high_task_wakeup = pdFALSE;
 
-static gptimer_handle_t control_timer = NULL;
+    xSemaphoreGiveFromISR(pid_semaphore, &high_task_wakeup);
+    xSemaphoreGiveFromISR(homing_semaphore, &high_task_wakeup);
+
+    return high_task_wakeup == pdTRUE;
+}
+
+void init_control_timer()
+{
+    gptimer_config_t timer_config = {
+        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
+        .direction = GPTIMER_COUNT_UP,
+        .resolution_hz = 1000000, // 1 MHz -> 1 tick = 1 microsecond
+    };
+
+    ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &control_timer));
+
+    gptimer_event_callbacks_t callbacks = {
+        .on_alarm = gptimer_callback,
+    };
+    ESP_ERROR_CHECK(gptimer_register_event_callbacks(control_timer, &callbacks, NULL));
+
+    gptimer_alarm_config_t alarm_config = {
+        .alarm_count = 1000000 / PID_LOOP_FREQUENCY,
+        .reload_count = 0,
+        .flags.auto_reload_on_alarm = true,
+    };
+    ESP_ERROR_CHECK(gptimer_set_alarm_action(control_timer, &alarm_config));
+
+    ESP_ERROR_CHECK(gptimer_enable(control_timer));
+    ESP_ERROR_CHECK(gptimer_start(control_timer));
+}
+
+void i2c_bus_init(i2c_port_t i2c_num, gpio_num_t sda, gpio_num_t scl)
+{
+    i2c_config_t conf = {
+        .mode = I2C_MODE_MASTER,
+        .sda_io_num = sda,
+        .sda_pullup_en = GPIO_PULLUP_ENABLE,
+        .scl_io_num = scl,
+        .scl_pullup_en = GPIO_PULLUP_ENABLE,
+        .master.clk_speed = I2C_FREQ_HZ,
+    };
+    ESP_ERROR_CHECK(i2c_param_config(i2c_num, &conf));
+    ESP_ERROR_CHECK(i2c_driver_install(i2c_num, conf.mode, 0, 0, 0));
+}
+
+void gpio_input_init(gpio_num_t pin)
+{
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << pin),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io_conf);
+}
+
+void nvs_init()
+{
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
+    {
+        ESP_LOGW(TAG, "NVS partition truncated or new version found, erasing...");
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+    ESP_LOGI(TAG, "NVS initialized successfully");
+}
+
+void motor1_cb(float speed)
+{
+    tb6612_motor_set_speed(&wrist.motor_1, speed);
+}
+
+void motor2_cb(float speed)
+{
+    tb6612_motor_set_speed(&wrist.motor_2, speed);
+}
+
+void pid_loop_task(void *param)
+{
+    float dt_s = 1.0f / PID_LOOP_FREQUENCY;
+    const int64_t PID_LOG_INTERVAL_US = (int64_t)(1000000.0f / PID_LOG_FREQUENCY_HZ);
+
+    double pid_freq = 0.0;
+    double loop_time_us = 0.0;
+    int64_t last_us = 0;
+    int64_t last_log_us = 0;
+
+    float diff_pos_feedback;
+    float diff_pos_delta;
+    float diff_vel_feedback = 0;
+    float diff_vel_sig;
+    float diff_pwm_sig;
+
+    float comm_vel_sig;
+    float comm_pos_delta;
+    float comm_pwm_sig;
+    float comm_pos_feedback;
+    float comm_vel_feedback = 0;
+
+    as5600_update(&wrist.axis_a.encoder);
+    wrist.axis_a.pos = as5600_get_position(&wrist.axis_a.encoder);
+    as5600_update(&wrist.axis_b.encoder);
+    wrist.axis_b.pos = as5600_get_position(&wrist.axis_b.encoder);
+
+    for (;;)
+    {
+        if (xSemaphoreTake(pid_semaphore, portMAX_DELAY) == pdTRUE)
+        {
+            int64_t loop_start_us = esp_timer_get_time();
+
+            as5600_update(&wrist.axis_a.encoder);
+            diff_pos_feedback = as5600_get_position(&wrist.axis_a.encoder);
+            diff_pos_delta = diff_pos_feedback - wrist.axis_a.pos;
+            diff_vel_feedback = AS5600_A_VELOCITY_FILTER_ALPHA * (diff_pos_delta / dt_s) + (1 - AS5600_A_VELOCITY_FILTER_ALPHA) * diff_vel_feedback;
+            wrist.axis_a.pos = diff_pos_feedback;
+            wrist.axis_a.vel = diff_vel_feedback;
+
+            as5600_update(&wrist.axis_b.encoder);
+            comm_pos_feedback = as5600_get_position(&wrist.axis_b.encoder);
+            comm_pos_delta = comm_pos_feedback - wrist.axis_b.pos;
+            comm_vel_feedback = AS5600_B_VELOCITY_FILTER_ALPHA * (comm_pos_delta / dt_s) + (1 - AS5600_B_VELOCITY_FILTER_ALPHA) * comm_vel_feedback;
+            wrist.axis_b.pos = comm_pos_feedback;
+            wrist.axis_b.vel = comm_vel_feedback;
+
+            //    Differential (A)
+            diff_vel_sig = pid_update(&wrist.axis_a.pos_pid, wrist.axis_a.pos_ctrl, diff_pos_feedback, wrist.axis_a.vel_ctrl);
+            diff_pwm_sig = pid_update(&wrist.axis_a.vel_pid, diff_vel_sig, diff_vel_feedback, diff_vel_sig);
+
+            set_diff_pwm(&wrist.diff_pwm_ctrl, diff_pwm_sig);
+
+            // Common (B)
+            comm_vel_sig = pid_update(&wrist.axis_b.pos_pid, wrist.axis_b.pos_ctrl, comm_pos_feedback, wrist.axis_b.vel_ctrl);
+            comm_pwm_sig = pid_update(&wrist.axis_b.vel_pid, comm_vel_sig, comm_vel_feedback, comm_vel_sig);
+
+            set_comm_pwm(&wrist.diff_pwm_ctrl, comm_pwm_sig);
+
+            wrist.axis_a.pos_ctrl += wrist.axis_a.vel_ctrl * dt_s;
+            wrist.axis_b.pos_ctrl += wrist.axis_b.vel_ctrl * dt_s;
+
+            int64_t now_us = esp_timer_get_time();
+            loop_time_us = PID_LOOP_TIME_ALPHA * (float)(now_us - loop_start_us) + (1.0f - PID_LOOP_TIME_ALPHA) * loop_time_us;
+
+            if (last_us > 0)
+            {
+                float time_between_loops_ms = (now_us - last_us) / 1000.0f;
+                float current_frequency = 1000.0f / time_between_loops_ms;
+                pid_freq = PID_FREQ_ALPHA * current_frequency + (1.0f - PID_FREQ_ALPHA) * pid_freq;
+            }
+            last_us = now_us;
+
+            if ((now_us - last_log_us) >= PID_LOG_INTERVAL_US)
+            {
+                ESP_LOGD(TAG,
+                         "PID Freq: %.2f Hz | Loop: %.0f us | "
+                         "A: vel_meas=%.4f vel_ctrl=%.4f PWM=%.4f"
+                         "B: vel_meas=%.4f vel_ctrl=%.4f PWM=%.4f",
+                         pid_freq, loop_time_us,
+                         diff_vel_feedback, diff_vel_sig, diff_pwm_sig,
+                         comm_vel_feedback, comm_vel_sig, comm_pwm_sig);
+                last_log_us = now_us;
+            }
+        }
+
+        taskYIELD();
+    }
+}
+
+void timer_callback(rcl_timer_t *timer, int64_t last_call_time)
+{
+    RCLC_UNUSED(last_call_time);
+    if (timer != NULL)
+    {
+        axis_a_state_publisher_msg.data.data[0] = wrist.axis_a.pos;
+        axis_a_state_publisher_msg.data.data[1] = wrist.axis_a.vel;
+        RCSOFTCHECK(rcl_publish(&axis_a_state_publisher, &axis_a_state_publisher_msg, NULL));
+
+        axis_b_state_publisher_msg.data.data[0] = wrist.axis_b.pos;
+        axis_b_state_publisher_msg.data.data[1] = wrist.axis_b.vel;
+        RCSOFTCHECK(rcl_publish(&axis_b_state_publisher, &axis_b_state_publisher_msg, NULL));
+    }
+}
 
 void axis_a_command_subscriber_callback(const void *msgin)
 {
@@ -121,116 +302,6 @@ void axis_b_command_subscriber_callback(const void *msgin)
 
     float vel = msg->data.data[1];
     wrist.axis_b.vel_ctrl = vel;
-}
-
-float axis_a_get_position(void)
-{
-    return as5600_get_position(&wrist.axis_a.encoder);
-}
-
-float axis_b_get_position(void)
-{
-    return as5600_get_position(&wrist.axis_b.encoder);
-}
-
-bool IRAM_ATTR gptimer_callback(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_data)
-{
-    BaseType_t high_task_wakeup = pdFALSE;
-
-    xSemaphoreGiveFromISR(pid_semaphore, &high_task_wakeup);
-    xSemaphoreGiveFromISR(homing_semaphore, &high_task_wakeup);
-
-    return high_task_wakeup == pdTRUE;
-}
-
-void init_control_timer()
-{
-    gptimer_config_t timer_config = {
-        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
-        .direction = GPTIMER_COUNT_UP,
-        .resolution_hz = 1000000, // 1 MHz -> 1 tick = 1 microsecond
-    };
-
-    ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &control_timer));
-
-    gptimer_event_callbacks_t callbacks = {
-        .on_alarm = gptimer_callback,
-    };
-    ESP_ERROR_CHECK(gptimer_register_event_callbacks(control_timer, &callbacks, NULL));
-
-    gptimer_alarm_config_t alarm_config = {
-        .alarm_count = 1000000 / PID_LOOP_FREQUENCY,
-        .reload_count = 0,
-        .flags.auto_reload_on_alarm = true,
-    };
-    ESP_ERROR_CHECK(gptimer_set_alarm_action(control_timer, &alarm_config));
-
-    ESP_ERROR_CHECK(gptimer_enable(control_timer));
-    ESP_ERROR_CHECK(gptimer_start(control_timer));
-}
-
-void motor1_cb(float speed)
-{
-    tb6612_motor_set_speed(&wrist.motor_1, speed);
-}
-
-void motor2_cb(float speed)
-{
-    tb6612_motor_set_speed(&wrist.motor_2, speed);
-}
-
-void gpio_input_init(gpio_num_t pin)
-{
-    gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << pin),
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_ENABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    gpio_config(&io_conf);
-}
-
-void i2c_bus_init(i2c_port_t i2c_num, gpio_num_t sda, gpio_num_t scl)
-{
-    i2c_config_t conf = {
-        .mode = I2C_MODE_MASTER,
-        .sda_io_num = sda,
-        .sda_pullup_en = GPIO_PULLUP_ENABLE,
-        .scl_io_num = scl,
-        .scl_pullup_en = GPIO_PULLUP_ENABLE,
-        .master.clk_speed = I2C_FREQ_HZ,
-    };
-    ESP_ERROR_CHECK(i2c_param_config(i2c_num, &conf));
-    ESP_ERROR_CHECK(i2c_driver_install(i2c_num, conf.mode, 0, 0, 0));
-}
-
-void nvs_init()
-{
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
-    {
-        ESP_LOGW(TAG, "NVS partition truncated or new version found, erasing...");
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(ret);
-    ESP_LOGI(TAG, "NVS initialized successfully");
-}
-
-void timer_callback(rcl_timer_t *timer, int64_t last_call_time)
-{
-    RCLC_UNUSED(last_call_time);
-    if (timer != NULL)
-    {
-        axis_a_state_publisher_msg.data.data[0] = wrist.axis_a.pos;
-        axis_a_state_publisher_msg.data.data[1] = wrist.axis_a.vel;
-        RCSOFTCHECK(rcl_publish(&axis_a_state_publisher, &axis_a_state_publisher_msg, NULL));
-
-        axis_b_state_publisher_msg.data.data[0] = wrist.axis_b.pos;
-        axis_b_state_publisher_msg.data.data[1] = wrist.axis_b.vel;
-        RCSOFTCHECK(rcl_publish(&axis_b_state_publisher, &axis_b_state_publisher_msg, NULL));
-    }
 }
 
 void micro_ros_task(void *arg)
@@ -328,101 +399,6 @@ try_uros_task:
     vTaskDelete(NULL);
 }
 
-void pid_loop_task(void *param)
-{
-    float dt_s = 1.0f / PID_LOOP_FREQUENCY;
-    const int64_t PID_LOG_INTERVAL_US = (int64_t)(1000000.0f / PID_LOG_FREQUENCY_HZ);
-
-    double pid_freq = 0.0;
-    double loop_time_us = 0.0; // Changed to microseconds
-    int64_t last_us = 0;
-    int64_t last_log_us = 0;
-
-    const float POSITION_EPSILON = 1e-6f;
-
-    float diff_pos_feedback;
-    float diff_pos_delta;
-    float diff_vel_feedback = 0;
-    float diff_vel_sig;
-    float diff_pwm_sig;
-
-    float comm_vel_sig;
-    float comm_pos_delta;
-    float comm_pwm_sig;
-    float comm_pos_feedback;
-    float comm_vel_feedback = 0;
-
-    as5600_update(&wrist.axis_a.encoder);
-    wrist.axis_a.pos = as5600_get_position(&wrist.axis_a.encoder);
-    as5600_update(&wrist.axis_b.encoder);
-    wrist.axis_b.pos = as5600_get_position(&wrist.axis_b.encoder);
-
-    for (;;)
-    {
-        if (xSemaphoreTake(pid_semaphore, portMAX_DELAY) == pdTRUE)
-        {
-            int64_t loop_start_us = esp_timer_get_time();
-
-            // Feedback
-            as5600_update(&wrist.axis_a.encoder);
-            diff_pos_feedback = as5600_get_position(&wrist.axis_a.encoder);
-            diff_pos_delta = diff_pos_feedback - wrist.axis_a.pos;
-            diff_vel_feedback = AS5600_A_VELOCITY_FILTER_ALPHA * (diff_pos_delta / dt_s) + (1 - AS5600_A_VELOCITY_FILTER_ALPHA) * diff_vel_feedback;
-            wrist.axis_a.pos = diff_pos_feedback;
-            wrist.axis_a.vel = diff_vel_feedback;
-
-            as5600_update(&wrist.axis_b.encoder);
-            comm_pos_feedback = as5600_get_position(&wrist.axis_b.encoder);
-            comm_pos_delta = comm_pos_feedback - wrist.axis_b.pos;
-            comm_vel_feedback = AS5600_B_VELOCITY_FILTER_ALPHA * (comm_pos_delta / dt_s) + (1 - AS5600_B_VELOCITY_FILTER_ALPHA) * comm_vel_feedback;
-            wrist.axis_b.pos = comm_pos_feedback;
-            wrist.axis_b.vel = comm_vel_feedback;
-
-            // ESP_LOGI(TAG, "diff_pos_delta: %f comm_pos_delta: %f", diff_pos_delta, comm_pos_delta);
-            //    Differential (A)
-            diff_vel_sig = pid_update(&wrist.axis_a.pos_pid, wrist.axis_a.pos_ctrl, diff_pos_feedback, wrist.axis_a.vel_ctrl);
-            diff_pwm_sig = pid_update(&wrist.axis_a.vel_pid, diff_vel_sig, diff_vel_feedback, diff_vel_sig);
-
-            set_diff_pwm(&wrist.diff_pwm_ctrl, diff_pwm_sig);
-
-            // Common (B)
-            comm_vel_sig = pid_update(&wrist.axis_b.pos_pid, wrist.axis_b.pos_ctrl, comm_pos_feedback, wrist.axis_b.vel_ctrl);
-            comm_pwm_sig = pid_update(&wrist.axis_b.vel_pid, comm_vel_sig, comm_vel_feedback, comm_vel_sig);
-
-            set_comm_pwm(&wrist.diff_pwm_ctrl, comm_pwm_sig);
-
-            // Update Positions
-            wrist.axis_a.pos_ctrl += wrist.axis_a.vel_ctrl * dt_s;
-            wrist.axis_b.pos_ctrl += wrist.axis_b.vel_ctrl * dt_s;
-
-            int64_t now_us = esp_timer_get_time();
-            loop_time_us = PID_LOOP_TIME_ALPHA * (float)(now_us - loop_start_us) + (1.0f - PID_LOOP_TIME_ALPHA) * loop_time_us;
-
-            if (last_us > 0)
-            {
-                float time_between_loops_ms = (now_us - last_us) / 1000.0f;
-                float current_frequency = 1000.0f / time_between_loops_ms;
-                pid_freq = PID_FREQ_ALPHA * current_frequency + (1.0f - PID_FREQ_ALPHA) * pid_freq;
-            }
-            last_us = now_us;
-
-            if ((now_us - last_log_us) >= PID_LOG_INTERVAL_US)
-            {
-                ESP_LOGD(TAG,
-                         "PID Freq: %.2f Hz | Loop: %.0f us | "
-                         "A: vel_meas=%.4f vel_ctrl=%.4f PWM=%.4f"
-                         "B: vel_meas=%.4f vel_ctrl=%.4f PWM=%.4f",
-                         pid_freq, loop_time_us,
-                         diff_vel_feedback, diff_vel_sig, diff_pwm_sig,
-                         comm_vel_feedback, comm_vel_sig, comm_pwm_sig);
-                last_log_us = now_us;
-            }
-        }
-
-        taskYIELD();
-    }
-}
-
 void app_main(void)
 {
     ESP_LOGI(TAG, "Starting Setup...");
@@ -505,7 +481,6 @@ void app_main(void)
 #error micro-ROS transports misconfigured
 #endif // RMW_UXRCE_TRANSPORT_CUSTOM
 
-    ESP_LOGI(TAG, "Starting micro ros");
     xTaskCreatePinnedToCore(
         micro_ros_task,
         "uros_task",
@@ -514,4 +489,6 @@ void app_main(void)
         5,
         NULL,
         0);
+
+    ESP_LOGI(TAG, "Setup Complete");
 }

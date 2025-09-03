@@ -14,11 +14,6 @@
 #define PID_FREQ_ALPHA 0.9f
 #define PID_LOOP_TIME_ALPHA 0.9f
 
-#define VEL_SIG_THRESHOLD 0.0f
-
-#define TIMER_GROUP TIMER_GROUP_0
-#define TIMER_IDX TIMER_0
-
 static const char *robot_name = "robot";
 
 // AXIS A
