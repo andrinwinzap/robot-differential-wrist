@@ -2,16 +2,16 @@
 #define CONFIG_H
 
 #define ROBOT_NAME "robot"
-#define AXIS_A_NAME "joint_1"
-#define AXIS_B_NAME "joint_2"
+#define AXIS_A_NAME "joint_5"
+#define AXIS_B_NAME "joint_6"
 
 #define PID_LOOP_FREQUENCY_HZ 100
 #define PID_LOG_FREQUENCY_HZ 10
 #define PID_FREQ_ALPHA 0.9f
 #define PID_LOOP_TIME_ALPHA 0.9f
 
-#define COARSE_HOMING_SPEED 1.5
-#define FINE_HOMING_SPEED 0.5
+#define COARSE_HOMING_SPEED 0.5
+#define FINE_HOMING_SPEED 0.3
 #define POSITION_TOLERANCE 1.0e-2
 
 #define I2C_FREQ_HZ 400000
@@ -23,7 +23,7 @@
 #define AXIS_A_MIN -M_PI / 2.0f + 0.03
 #define AXIS_A_MAX_SPEED 1.7f
 
-#define ENDSTOP_A_PIN GPIO_NUM_11
+#define ENDSTOP_A_PIN GPIO_NUM_8
 #define ENDSTOP_A_POSITION AXIS_A_MAX - 0.01
 
 #define AS5600_A_I2C_PORT I2C_NUM_0
@@ -53,7 +53,7 @@
 #define AXIS_B_MIN -M_PI
 #define AXIS_B_MAX_SPEED 1.7f
 
-#define ENDSTOP_B_PIN GPIO_NUM_8
+#define ENDSTOP_B_PIN GPIO_NUM_11
 #define ENDSTOP_B_POSITION M_PI / 9.0f
 
 #define AS5600_B_I2C_PORT I2C_NUM_1

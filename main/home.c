@@ -52,6 +52,7 @@ void homing_task(void *pvParams)
     {
         if (xSemaphoreTake(params->homing_semaphore, portMAX_DELAY) == pdTRUE)
         {
+            //ESP_LOGI(TAG, "A Pos: %f, A Pos Ctrl: %f, A Vel: %f, A Vel Ctrl: %f, B Pos: %f, B Pos Ctrl: %f, B Vel: %f, B Vel Ctrl: %f,", params->wrist->axis_a.pos, params->wrist->axis_a.pos_ctrl, params->wrist->axis_a.vel, params->wrist->axis_a.vel_ctrl, params->wrist->axis_b.pos, params->wrist->axis_b.pos_ctrl, params->wrist->axis_b.vel, params->wrist->axis_b.vel_ctrl);
             if (state != last_logged_state)
             {
                 ESP_LOGI(TAG, "State: %d", state);
@@ -65,14 +66,14 @@ void homing_task(void *pvParams)
                 {
                     params->wrist->axis_a.vel_ctrl = 0.0;
                     float coarse_pos = params->wrist->axis_a.pos;
-                    params->wrist->axis_a.pos_ctrl = coarse_pos - 0.1;
+                    params->wrist->axis_a.pos_ctrl = coarse_pos - 0.2;
                     ESP_LOGI(TAG, "A endstop (coarse) hit at %.4f", coarse_pos);
                     state = BACKING_OFF_A_ENDSTOP;
                 }
                 break;
 
             case BACKING_OFF_A_ENDSTOP:
-                if (reached_target_pos(&params->wrist->axis_a) && reached_target_pos(&params->wrist->axis_b))
+                if (reached_target_pos(&params->wrist->axis_a))
                 {
                     params->wrist->axis_a.vel_ctrl = FINE_HOMING_SPEED;
                     state = FINDING_A_AXIS_END_FINE;
@@ -85,7 +86,7 @@ void homing_task(void *pvParams)
                     params->wrist->axis_a.vel_ctrl = 0.0;
                     as5600_set_position(&params->wrist->axis_a.encoder, ENDSTOP_A_POSITION);
                     params->wrist->axis_a.pos = ENDSTOP_A_POSITION;
-                    params->wrist->axis_a.pos_ctrl = AXIS_A_MAX + 0.03;
+                    params->wrist->axis_a.pos_ctrl = AXIS_A_MAX + 0.00;
                     ESP_LOGI(TAG, "A endstop (fine) hit, zeroed to %.4f", ENDSTOP_A_POSITION);
                     state = MOVING_TO_B_END;
                 }
@@ -102,7 +103,7 @@ void homing_task(void *pvParams)
                 if (reached_target_pos(&params->wrist->axis_b))
                 {
                     ESP_LOGI(TAG, "B Axis initial: %d", b_axis_endstop());
-                    params->wrist->axis_b.vel_ctrl = FINE_HOMING_SPEED * dir;
+                    params->wrist->axis_b.vel_ctrl = FINE_HOMING_SPEED * -dir;
                     state = FINDING_B_AXIS_RISING_EDGE;
                 }
                 break;
