@@ -198,6 +198,7 @@ void pid_loop_task(void *param)
             wrist.axis_b.pos = comm_pos_feedback;
             wrist.axis_b.vel = comm_vel_feedback;
 
+            //ESP_LOGI(TAG, "A: %f, B: %f", diff_pos_feedback, comm_pos_feedback);
             //    Differential (A)
             diff_vel_sig = pid_update(&wrist.axis_a.pos_pid, wrist.axis_a.pos_ctrl, diff_pos_feedback, wrist.axis_a.vel_ctrl);
             diff_pwm_sig = pid_update(&wrist.axis_a.vel_pid, diff_vel_sig, diff_vel_feedback, diff_vel_sig);

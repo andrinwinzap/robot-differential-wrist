@@ -47,12 +47,12 @@ void homing_task(void *pvParams)
     ESP_LOGI(TAG, "Position Tolerance: %f", POSITION_TOLERANCE);
     float pos = params->wrist->axis_b.pos;
     dir = (pos < 0) - (pos > 0);
-    params->wrist->axis_b.pos_ctrl = -dir * 0.5f - ENDSTOP_B_POSITION;
+    params->wrist->axis_b.pos_ctrl = 1.5f;
     while (true)
     {
         if (xSemaphoreTake(params->homing_semaphore, portMAX_DELAY) == pdTRUE)
         {
-            //ESP_LOGI(TAG, "A Pos: %f, A Pos Ctrl: %f, A Vel: %f, A Vel Ctrl: %f, B Pos: %f, B Pos Ctrl: %f, B Vel: %f, B Vel Ctrl: %f,", params->wrist->axis_a.pos, params->wrist->axis_a.pos_ctrl, params->wrist->axis_a.vel, params->wrist->axis_a.vel_ctrl, params->wrist->axis_b.pos, params->wrist->axis_b.pos_ctrl, params->wrist->axis_b.vel, params->wrist->axis_b.vel_ctrl);
+            ESP_LOGI(TAG, "A Pos: %f, A Pos Ctrl: %f, A Vel: %f, A Vel Ctrl: %f, B Pos: %f, B Pos Ctrl: %f, B Vel: %f, B Vel Ctrl: %f,", params->wrist->axis_a.pos, params->wrist->axis_a.pos_ctrl, params->wrist->axis_a.vel, params->wrist->axis_a.vel_ctrl, params->wrist->axis_b.pos, params->wrist->axis_b.pos_ctrl, params->wrist->axis_b.vel, params->wrist->axis_b.vel_ctrl);
             if (state != last_logged_state)
             {
                 ESP_LOGI(TAG, "State: %d", state);
@@ -103,7 +103,7 @@ void homing_task(void *pvParams)
                 if (reached_target_pos(&params->wrist->axis_b))
                 {
                     ESP_LOGI(TAG, "B Axis initial: %d", b_axis_endstop());
-                    params->wrist->axis_b.vel_ctrl = FINE_HOMING_SPEED * -dir;
+                    params->wrist->axis_b.vel_ctrl = -FINE_HOMING_SPEED;
                     state = FINDING_B_AXIS_RISING_EDGE;
                 }
                 break;
@@ -124,7 +124,8 @@ void homing_task(void *pvParams)
                     falling_edge = params->wrist->axis_b.pos;
                     ESP_LOGI(TAG, "B falling edge at %.4f", falling_edge);
 
-                    float calibrated = (falling_edge - rising_edge) / 2.0f + ENDSTOP_B_POSITION;
+                    float center = ((falling_edge + rising_edge) / 2.0f);
+                    float calibrated = ENDSTOP_B_POSITION + (params->wrist->axis_b.pos - center);
                     as5600_set_position(&params->wrist->axis_b.encoder, calibrated);
                     params->wrist->axis_b.pos = calibrated;
                     params->wrist->axis_a.pos_ctrl = 0.0f;
