@@ -52,7 +52,6 @@ void homing_task(void *pvParams)
     {
         if (xSemaphoreTake(params->homing_semaphore, portMAX_DELAY) == pdTRUE)
         {
-            ESP_LOGI(TAG, "A Pos: %f, A Pos Ctrl: %f, A Vel: %f, A Vel Ctrl: %f, B Pos: %f, B Pos Ctrl: %f, B Vel: %f, B Vel Ctrl: %f,", params->wrist->axis_a.pos, params->wrist->axis_a.pos_ctrl, params->wrist->axis_a.vel, params->wrist->axis_a.vel_ctrl, params->wrist->axis_b.pos, params->wrist->axis_b.pos_ctrl, params->wrist->axis_b.vel, params->wrist->axis_b.vel_ctrl);
             if (state != last_logged_state)
             {
                 ESP_LOGI(TAG, "State: %d", state);
@@ -147,6 +146,7 @@ void homing_task(void *pvParams)
             case FINISHED:
                 return;
             }
+            taskYIELD();
         }
     }
 }

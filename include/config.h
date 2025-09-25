@@ -14,7 +14,7 @@
 #define FINE_HOMING_SPEED 0.3
 #define POSITION_TOLERANCE 1.0e-2
 
-#define I2C_FREQ_HZ 400000
+#define I2C_FREQ_HZ 10000
 
 #define GEAR_RATIO 20.0f / 29.0f
 
@@ -54,7 +54,7 @@
 #define AXIS_B_MAX_SPEED 1.7f
 
 #define ENDSTOP_B_PIN GPIO_NUM_11
-#define ENDSTOP_B_POSITION (M_PI / 9.0f) + (M_PI/2)
+#define ENDSTOP_B_POSITION (M_PI / 9.0f) + (M_PI / 2)
 
 #define AS5600_B_I2C_PORT I2C_NUM_1
 #define AS5600_B_I2C_SDA 10
