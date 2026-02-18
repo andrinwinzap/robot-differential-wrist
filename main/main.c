@@ -32,6 +32,11 @@
 #define TOPIC_BUFFER_SIZE 64
 #define COMMAND_BUFFER_LEN 2
 #define STATE_BUFFER_LEN 2
+#define UROS_RECONNECT_DELAY_MS 500
+#define UROS_PING_TIMEOUT_MS 100
+#define UROS_PING_ATTEMPTS 1
+#define UROS_PING_INTERVAL_MS 1000
+#define UROS_EXECUTOR_WAIT_MS 10
 
 rcl_publisher_t axis_a_state_publisher;
 std_msgs__msg__Float32MultiArray axis_a_state_publisher_msg;
@@ -65,6 +70,163 @@ wrist_t wrist;
 static homing_params_t homing_params;
 
 static const char *TAG = "Wrist";
+
+typedef enum
+{
+    WAITING_AGENT,
+    AGENT_AVAILABLE,
+    AGENT_CONNECTED,
+    AGENT_DISCONNECTED
+} uros_state_t;
+
+void timer_callback(rcl_timer_t *timer, int64_t last_call_time);
+void axis_a_command_subscriber_callback(const void *msgin);
+void axis_b_command_subscriber_callback(const void *msgin);
+
+static bool create_micro_ros_entities(
+    rcl_allocator_t *allocator,
+    rclc_support_t *support,
+    rcl_node_t *node,
+    rcl_timer_t *timer,
+    rclc_executor_t *executor)
+{
+    rcl_ret_t rc;
+
+    rc = rclc_support_init(support, 0, NULL, allocator);
+    if (rc != RCL_RET_OK)
+    {
+        return false;
+    }
+
+    rc = rclc_node_init_default(node, "wrist", "", support);
+    if (rc != RCL_RET_OK)
+    {
+        return false;
+    }
+
+    rc = rclc_publisher_init_best_effort(
+        &axis_a_state_publisher,
+        node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),
+        axis_a_state_publisher_topic);
+    if (rc != RCL_RET_OK)
+    {
+        return false;
+    }
+
+    std_msgs__msg__Float32MultiArray__init(&axis_a_state_publisher_msg);
+    axis_a_state_publisher_msg.data.data = axis_a_state_buffer;
+    axis_a_state_publisher_msg.data.capacity = STATE_BUFFER_LEN;
+    axis_a_state_publisher_msg.data.size = STATE_BUFFER_LEN;
+
+    rc = rclc_publisher_init_best_effort(
+        &axis_b_state_publisher,
+        node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),
+        axis_b_state_publisher_topic);
+    if (rc != RCL_RET_OK)
+    {
+        return false;
+    }
+
+    std_msgs__msg__Float32MultiArray__init(&axis_b_state_publisher_msg);
+    axis_b_state_publisher_msg.data.data = axis_b_state_buffer;
+    axis_b_state_publisher_msg.data.capacity = STATE_BUFFER_LEN;
+    axis_b_state_publisher_msg.data.size = STATE_BUFFER_LEN;
+
+    rc = rclc_subscription_init_best_effort(
+        &axis_a_command_subscriber,
+        node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),
+        axis_a_command_subscriber_topic);
+    if (rc != RCL_RET_OK)
+    {
+        return false;
+    }
+
+    std_msgs__msg__Float32MultiArray__init(&axis_a_command_subscriber_msg);
+    axis_a_command_subscriber_msg.data.data = axis_a_command_buffer;
+    axis_a_command_subscriber_msg.data.capacity = COMMAND_BUFFER_LEN;
+    axis_a_command_subscriber_msg.data.size = 0;
+
+    rc = rclc_subscription_init_best_effort(
+        &axis_b_command_subscriber,
+        node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),
+        axis_b_command_subscriber_topic);
+    if (rc != RCL_RET_OK)
+    {
+        return false;
+    }
+
+    std_msgs__msg__Float32MultiArray__init(&axis_b_command_subscriber_msg);
+    axis_b_command_subscriber_msg.data.data = axis_b_command_buffer;
+    axis_b_command_subscriber_msg.data.capacity = COMMAND_BUFFER_LEN;
+    axis_b_command_subscriber_msg.data.size = 0;
+
+    rc = rclc_timer_init_default2(
+        timer,
+        support,
+        RCL_MS_TO_NS(100),
+        timer_callback,
+        true);
+    if (rc != RCL_RET_OK)
+    {
+        return false;
+    }
+
+    rc = rclc_executor_init(executor, &support->context, 3, allocator);
+    if (rc != RCL_RET_OK)
+    {
+        return false;
+    }
+
+    rc = rclc_executor_add_timer(executor, timer);
+    if (rc != RCL_RET_OK)
+    {
+        return false;
+    }
+
+    rc = rclc_executor_add_subscription(
+        executor,
+        &axis_a_command_subscriber,
+        &axis_a_command_subscriber_msg,
+        axis_a_command_subscriber_callback,
+        ON_NEW_DATA);
+    if (rc != RCL_RET_OK)
+    {
+        return false;
+    }
+
+    rc = rclc_executor_add_subscription(
+        executor,
+        &axis_b_command_subscriber,
+        &axis_b_command_subscriber_msg,
+        axis_b_command_subscriber_callback,
+        ON_NEW_DATA);
+    if (rc != RCL_RET_OK)
+    {
+        return false;
+    }
+
+    return true;
+}
+
+static void destroy_micro_ros_entities(
+    rclc_support_t *support,
+    rcl_node_t *node,
+    rcl_timer_t *timer,
+    rclc_executor_t *executor)
+{
+    rclc_executor_fini(executor);
+    rcl_timer_fini(timer);
+    rcl_subscription_fini(&axis_a_command_subscriber, node);
+    rcl_subscription_fini(&axis_b_command_subscriber, node);
+    rcl_publisher_fini(&axis_a_state_publisher, node);
+    rcl_publisher_fini(&axis_b_state_publisher, node);
+    rcl_node_fini(node);
+    rclc_support_fini(support);
+}
 
 bool IRAM_ATTR gptimer_callback(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_data)
 {
@@ -306,97 +468,97 @@ void axis_b_command_subscriber_callback(const void *msgin)
 
 void micro_ros_task(void *arg)
 {
-try_uros_task:
+    (void)arg;
     rcl_allocator_t allocator = rcl_get_default_allocator();
-    rclc_support_t support;
+    uros_state_t state = WAITING_AGENT;
+    int64_t last_ping_check_us = 0;
 
-    RCCHECK(rclc_support_init(&support, 0, NULL, &allocator));
+    rclc_support_t support = (rclc_support_t){0};
+    rcl_node_t node = rcl_get_zero_initialized_node();
+    rcl_timer_t timer = rcl_get_zero_initialized_timer();
+    rclc_executor_t executor = rclc_executor_get_zero_initialized_executor();
+    axis_a_state_publisher = rcl_get_zero_initialized_publisher();
+    axis_b_state_publisher = rcl_get_zero_initialized_publisher();
+    axis_a_command_subscriber = rcl_get_zero_initialized_subscription();
+    axis_b_command_subscriber = rcl_get_zero_initialized_subscription();
 
-    rcl_node_t node;
-    RCCHECK(rclc_node_init_default(&node, "wrist", "", &support));
-
-    RCCHECK(rclc_publisher_init_default(
-        &axis_a_state_publisher,
-        &node,
-        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),
-        axis_a_state_publisher_topic));
-
-    std_msgs__msg__Float32MultiArray__init(&axis_a_state_publisher_msg);
-    axis_a_state_publisher_msg.data.data = axis_a_state_buffer;
-    axis_a_state_publisher_msg.data.capacity = STATE_BUFFER_LEN;
-    axis_a_state_publisher_msg.data.size = STATE_BUFFER_LEN;
-
-    RCCHECK(rclc_publisher_init_default(
-        &axis_b_state_publisher,
-        &node,
-        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),
-        axis_b_state_publisher_topic));
-
-    std_msgs__msg__Float32MultiArray__init(&axis_b_state_publisher_msg);
-    axis_b_state_publisher_msg.data.data = axis_b_state_buffer;
-    axis_b_state_publisher_msg.data.capacity = STATE_BUFFER_LEN;
-    axis_b_state_publisher_msg.data.size = STATE_BUFFER_LEN;
-
-    RCCHECK(rclc_subscription_init_default(
-        &axis_a_command_subscriber,
-        &node,
-        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),
-        axis_a_command_subscriber_topic));
-
-    std_msgs__msg__Float32MultiArray__init(&axis_a_command_subscriber_msg);
-    axis_a_command_subscriber_msg.data.data = axis_a_command_buffer;
-    axis_a_command_subscriber_msg.data.capacity = COMMAND_BUFFER_LEN;
-    axis_a_command_subscriber_msg.data.size = 0;
-
-    std_msgs__msg__Float32MultiArray__init(&axis_b_command_subscriber_msg);
-    axis_b_command_subscriber_msg.data.data = axis_b_command_buffer;
-    axis_b_command_subscriber_msg.data.capacity = COMMAND_BUFFER_LEN;
-    axis_b_command_subscriber_msg.data.size = 0;
-
-    RCCHECK(rclc_subscription_init_default(
-        &axis_b_command_subscriber,
-        &node,
-        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),
-        axis_b_command_subscriber_topic));
-
-    rcl_timer_t timer;
-    const unsigned int timer_timeout = 100;
-    RCCHECK(rclc_timer_init_default2(
-        &timer,
-        &support,
-        RCL_MS_TO_NS(timer_timeout),
-        timer_callback,
-        true));
-
-    rclc_executor_t executor;
-    RCCHECK(rclc_executor_init(&executor, &support.context, 3, &allocator));
-    RCCHECK(rclc_executor_add_timer(&executor, &timer));
-
-    RCCHECK(rclc_executor_add_subscription(
-        &executor,
-        &axis_a_command_subscriber,
-        &axis_a_command_subscriber_msg,
-        axis_a_command_subscriber_callback,
-        ON_NEW_DATA));
-
-    RCCHECK(rclc_executor_add_subscription(
-        &executor,
-        &axis_b_command_subscriber,
-        &axis_b_command_subscriber_msg,
-        axis_b_command_subscriber_callback,
-        ON_NEW_DATA));
-
-    while (1)
+    for (;;)
     {
-        rclc_executor_spin_some(&executor, RCL_MS_TO_NS(10));
+        switch (state)
+        {
+        case WAITING_AGENT:
+            if (rmw_uros_ping_agent(UROS_PING_TIMEOUT_MS, UROS_PING_ATTEMPTS) == RMW_RET_OK)
+            {
+                state = AGENT_AVAILABLE;
+            }
+            else
+            {
+                vTaskDelay(pdMS_TO_TICKS(UROS_RECONNECT_DELAY_MS));
+            }
+            break;
+
+        case AGENT_AVAILABLE:
+            support = (rclc_support_t){0};
+            node = rcl_get_zero_initialized_node();
+            timer = rcl_get_zero_initialized_timer();
+            executor = rclc_executor_get_zero_initialized_executor();
+            axis_a_state_publisher = rcl_get_zero_initialized_publisher();
+            axis_b_state_publisher = rcl_get_zero_initialized_publisher();
+            axis_a_command_subscriber = rcl_get_zero_initialized_subscription();
+            axis_b_command_subscriber = rcl_get_zero_initialized_subscription();
+
+            if (create_micro_ros_entities(&allocator, &support, &node, &timer, &executor))
+            {
+                state = AGENT_CONNECTED;
+                last_ping_check_us = esp_timer_get_time();
+                ESP_LOGI(TAG, "Agent connected");
+            }
+            else
+            {
+                ESP_LOGW(TAG, "Entity creation failed, retrying...");
+                destroy_micro_ros_entities(&support, &node, &timer, &executor);
+                state = WAITING_AGENT;
+                vTaskDelay(pdMS_TO_TICKS(UROS_RECONNECT_DELAY_MS));
+            }
+            break;
+
+        case AGENT_CONNECTED:
+            if (rclc_executor_spin_some(&executor, RCL_MS_TO_NS(UROS_EXECUTOR_WAIT_MS)) != RCL_RET_OK)
+            {
+                state = AGENT_DISCONNECTED;
+                break;
+            }
+
+            if ((esp_timer_get_time() - last_ping_check_us) >= (UROS_PING_INTERVAL_MS * 1000LL))
+            {
+                if (rmw_uros_ping_agent(UROS_PING_TIMEOUT_MS, UROS_PING_ATTEMPTS) != RMW_RET_OK)
+                {
+                    state = AGENT_DISCONNECTED;
+                    break;
+                }
+                last_ping_check_us = esp_timer_get_time();
+            }
+
+            vTaskDelay(pdMS_TO_TICKS(1));
+            break;
+
+        case AGENT_DISCONNECTED:
+            ESP_LOGW(TAG, "Agent disconnected, destroying entities...");
+            rmw_context_t *rmw_context = rcl_context_get_rmw_context(&support.context);
+            if (rmw_context != NULL)
+            {
+                (void)rmw_uros_set_context_entity_destroy_session_timeout(rmw_context, 0);
+            }
+            destroy_micro_ros_entities(&support, &node, &timer, &executor);
+            state = WAITING_AGENT;
+            vTaskDelay(pdMS_TO_TICKS(UROS_RECONNECT_DELAY_MS));
+            break;
+
+        default:
+            state = WAITING_AGENT;
+            break;
+        }
     }
-
-    // free resources
-    RCCHECK(rcl_publisher_fini(&axis_a_state_publisher, &node));
-    RCCHECK(rcl_publisher_fini(&axis_b_state_publisher, &node));
-    RCCHECK(rcl_node_fini(&node));
-
-    vTaskDelete(NULL);
 }
 
 void app_main(void)
