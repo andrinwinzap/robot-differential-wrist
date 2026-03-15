@@ -19,8 +19,8 @@
 #define GEAR_RATIO 20.0f / 29.0f
 
 // AXIS A
-#define AXIS_A_MAX M_PI / 2.0f - 0.03
-#define AXIS_A_MIN -M_PI / 2.0f + 0.03
+#define AXIS_A_MAX M_PI / 2.0f - 0.00
+#define AXIS_A_MIN -M_PI / 2.0f + 0.00
 #define AXIS_A_MAX_SPEED 1.7f
 
 #define ENDSTOP_A_PIN GPIO_NUM_8
