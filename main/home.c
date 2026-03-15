@@ -6,7 +6,7 @@ static const char *TAG = "HOMING";
 
 bool a_axis_endstop()
 {
-    return gpio_get_level(ENDSTOP_A_PIN);
+    return !gpio_get_level(ENDSTOP_A_PIN);
 }
 
 bool b_axis_endstop()
@@ -47,7 +47,7 @@ void homing_task(void *pvParams)
     ESP_LOGI(TAG, "Position Tolerance: %f", POSITION_TOLERANCE);
     float pos = params->wrist->axis_b.pos;
     dir = (pos < 0) - (pos > 0);
-    params->wrist->axis_b.pos_ctrl = 1.5f;
+    params->wrist->axis_b.pos_ctrl = 2.0f;
     while (true)
     {
         if (xSemaphoreTake(params->homing_semaphore, portMAX_DELAY) == pdTRUE)

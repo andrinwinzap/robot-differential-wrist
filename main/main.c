@@ -391,11 +391,11 @@ void pid_loop_task(void *param)
             {
                 ESP_LOGD(TAG,
                          "PID Freq: %.2f Hz | Loop: %.0f us | "
-                         "A: vel_meas=%.4f vel_ctrl=%.4f PWM=%.4f"
-                         "B: vel_meas=%.4f vel_ctrl=%.4f PWM=%.4f",
+                         "A: vel_meas=%.4f vel_ctrl=%.4f PWM=%.4f POS=%.4f POS_CTRL=%.4f | "
+                         "B: vel_meas=%.4f vel_ctrl=%.4f PWM=%.4f POS=%.4f POS_CTRL=%.4f",
                          pid_freq, loop_time_us,
-                         diff_vel_feedback, diff_vel_sig, diff_pwm_sig,
-                         comm_vel_feedback, comm_vel_sig, comm_pwm_sig);
+                         diff_vel_feedback, diff_vel_sig, diff_pwm_sig, diff_pos_feedback, wrist.axis_a.pos_ctrl,
+                         comm_vel_feedback, comm_vel_sig, comm_pwm_sig, comm_pos_feedback, wrist.axis_b.pos_ctrl);
                 last_log_us = now_us;
             }
             taskYIELD();
@@ -582,8 +582,8 @@ void app_main(void)
     i2c_bus_init(AS5600_A_I2C_PORT, AS5600_A_I2C_SDA, AS5600_A_I2C_SCL);
     i2c_bus_init(AS5600_B_I2C_PORT, AS5600_B_I2C_SDA, AS5600_B_I2C_SCL);
 
-    tb6612_motor_init(&wrist.motor_1, TB6612_A_IN1, TB6612_A_IN2, TB6612_A_PWM, MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A);
-    tb6612_motor_init(&wrist.motor_2, TB6612_B_IN1, TB6612_B_IN2, TB6612_B_PWM, MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_A);
+    tb6612_motor_init(&wrist.motor_1, TB6612_A_DIR, TB6612_A_PWM, MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, TB6612_A_INVERT_DIR);
+    tb6612_motor_init(&wrist.motor_2, TB6612_B_DIR, TB6612_B_PWM, MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_A, TB6612_B_INVERT_DIR);
 
     wrist.axis_a.pos_ctrl = 0.0f;
     wrist.axis_a.vel_ctrl = 0.0f;

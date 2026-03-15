@@ -1,22 +1,24 @@
 #include "tb6612.h"
 #include <math.h>
+#include "esp_log.h"
 
 void tb6612_motor_init(tb6612_motor_t *motor,
-                       gpio_num_t in1_pin, gpio_num_t in2_pin,
+                       gpio_num_t dir_pin,
                        gpio_num_t pwm_pin,
                        mcpwm_unit_t unit,
                        mcpwm_timer_t timer,
-                       mcpwm_operator_t op)
+                       mcpwm_operator_t op,
+                       bool invert_dir)
 {
-    motor->in1_pin = in1_pin;
-    motor->in2_pin = in2_pin;
+    motor->dir_pin = dir_pin;
     motor->pwm_pin = pwm_pin;
     motor->unit = unit;
     motor->timer = timer;
     motor->op = op;
+    motor->invert_dir = invert_dir;
 
     gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << in1_pin) | (1ULL << in2_pin),
+        .pin_bit_mask = (1ULL << dir_pin),
         .mode = GPIO_MODE_OUTPUT,
         .intr_type = GPIO_INTR_DISABLE};
     gpio_config(&io_conf);
@@ -46,27 +48,18 @@ void tb6612_motor_set_speed(const tb6612_motor_t *motor, float speed)
 
     if (speed == 0.0f)
     {
-        // Active brake
-        gpio_set_level(motor->in1_pin, 0);
-        gpio_set_level(motor->in2_pin, 0);
-        mcpwm_set_duty(motor->unit, motor->timer, motor->op, 0.0f); // No PWM during brake
+        mcpwm_set_duty(motor->unit, motor->timer, motor->op, 0.0f);
+        return;
     }
-    else
-    {
-        float min_duty = 0.05f; // Minimum effective duty
-        float duty = (min_duty + (1.0f - min_duty) * fabsf(speed)) * 100.0f;
 
-        if (speed > 0.0f)
-        {
-            gpio_set_level(motor->in1_pin, 1);
-            gpio_set_level(motor->in2_pin, 0);
-        }
-        else
-        {
-            gpio_set_level(motor->in1_pin, 0);
-            gpio_set_level(motor->in2_pin, 1);
-        }
+    float min_duty = 0.05f;
+    float duty = (min_duty + (1.0f - min_duty) * fabsf(speed)) * 100.0f;
 
-        mcpwm_set_duty(motor->unit, motor->timer, motor->op, duty);
-    }
+    bool direction = (speed > 0.0f);
+
+    if (motor->invert_dir)
+        direction = !direction;
+
+    gpio_set_level(motor->dir_pin, direction);
+    mcpwm_set_duty(motor->unit, motor->timer, motor->op, duty);
 }
