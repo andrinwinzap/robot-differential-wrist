@@ -360,6 +360,26 @@ void pid_loop_task(void *param)
             wrist.axis_b.pos = comm_pos_feedback;
             wrist.axis_b.vel = comm_vel_feedback;
 
+            wrist.axis_a.pos_ctrl += wrist.axis_a.vel_ctrl * dt_s;
+            if (wrist.axis_a.pos_ctrl > AXIS_A_MAX) {
+                wrist.axis_a.pos_ctrl = AXIS_A_MAX;
+                wrist.axis_a.vel_ctrl = 0.0f;
+            }
+            else if (wrist.axis_a.pos_ctrl < AXIS_A_MIN) {
+                wrist.axis_a.pos_ctrl = AXIS_A_MIN;
+                wrist.axis_a.vel_ctrl = 0.0f;
+            }
+
+            wrist.axis_b.pos_ctrl += wrist.axis_b.vel_ctrl * dt_s;
+            if (wrist.axis_b.pos_ctrl > AXIS_B_MAX) {
+                wrist.axis_b.pos_ctrl = AXIS_B_MAX;
+                wrist.axis_b.vel_ctrl = 0.0f;
+            }
+            else if (wrist.axis_b.pos_ctrl < AXIS_B_MIN) {
+                wrist.axis_b.pos_ctrl = AXIS_B_MIN;
+                wrist.axis_b.vel_ctrl = 0.0f;
+            }
+
             // ESP_LOGI(TAG, "A: %f, B: %f", diff_pos_feedback, comm_pos_feedback);
             //     Differential (A)
             diff_vel_sig = pid_update(&wrist.axis_a.pos_pid, wrist.axis_a.pos_ctrl, diff_pos_feedback, wrist.axis_a.vel_ctrl);
@@ -372,9 +392,6 @@ void pid_loop_task(void *param)
             comm_pwm_sig = pid_update(&wrist.axis_b.vel_pid, comm_vel_sig, comm_vel_feedback, comm_vel_sig);
 
             set_comm_pwm(&wrist.diff_pwm_ctrl, comm_pwm_sig);
-
-            wrist.axis_a.pos_ctrl += wrist.axis_a.vel_ctrl * dt_s;
-            wrist.axis_b.pos_ctrl += wrist.axis_b.vel_ctrl * dt_s;
 
             int64_t now_us = esp_timer_get_time();
             loop_time_us = PID_LOOP_TIME_ALPHA * (float)(now_us - loop_start_us) + (1.0f - PID_LOOP_TIME_ALPHA) * loop_time_us;
@@ -439,6 +456,10 @@ void axis_a_command_subscriber_callback(const void *msgin)
     wrist.axis_a.pos_ctrl = pos;
 
     float vel = msg->data.data[1];
+    if (vel > AXIS_A_MAX_SPEED)
+        vel = AXIS_A_MAX_SPEED;
+    else if (vel < -AXIS_A_MAX_SPEED)
+        vel = -AXIS_A_MAX_SPEED;
     wrist.axis_a.vel_ctrl = vel;
 }
 
@@ -463,6 +484,10 @@ void axis_b_command_subscriber_callback(const void *msgin)
     wrist.axis_b.pos_ctrl = pos;
 
     float vel = msg->data.data[1];
+    if (vel > AXIS_B_MAX_SPEED)
+        vel = AXIS_B_MAX_SPEED;
+    else if (vel < -AXIS_B_MAX_SPEED)
+        vel = -AXIS_B_MAX_SPEED;
     wrist.axis_b.vel_ctrl = vel;
 }
 
