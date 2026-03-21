@@ -29,6 +29,10 @@
 #include "wrist.h"
 #include "home.h"
 
+#define LED_OK_PIN       GPIO_NUM_7
+#define LED_ERROR_PIN    GPIO_NUM_15
+#define LED_HOMED_PIN    GPIO_NUM_16
+
 #define TOPIC_BUFFER_SIZE 64
 #define COMMAND_BUFFER_LEN 2
 #define STATE_BUFFER_LEN 2
@@ -264,6 +268,43 @@ void init_control_timer()
     ESP_ERROR_CHECK(gptimer_start(control_timer));
 }
 
+void led_init(void)
+{
+    gpio_num_t leds[] = {LED_OK_PIN, LED_ERROR_PIN, LED_HOMED_PIN};
+    for (int i = 0; i < 3; i++) {
+        gpio_set_level(leds[i], 1); // drive high before enabling output to avoid glitch
+        gpio_config_t io_conf = {
+            .pin_bit_mask = (1ULL << leds[i]),
+            .mode = GPIO_MODE_OUTPUT,
+            .pull_up_en = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type = GPIO_INTR_DISABLE,
+        };
+        gpio_config(&io_conf);
+    }
+}
+
+#define ERROR_FLAG_ENCODER  (1u << 0)
+#define ERROR_FLAG_AGENT    (1u << 1)
+
+static volatile uint32_t error_flags = 0;
+
+static void set_error_flag(uint32_t flag)
+{
+    error_flags |= flag;
+    gpio_set_level(LED_OK_PIN, 1);    // ok off
+    gpio_set_level(LED_ERROR_PIN, 0); // error on
+}
+
+static void clear_error_flag(uint32_t flag)
+{
+    error_flags &= ~flag;
+    if (error_flags == 0) {
+        gpio_set_level(LED_ERROR_PIN, 1); // error off
+        gpio_set_level(LED_OK_PIN, 0);    // ok on
+    }
+}
+
 void i2c_bus_init(i2c_port_t i2c_num, gpio_num_t sda, gpio_num_t scl)
 {
     i2c_config_t conf = {
@@ -346,14 +387,20 @@ void pid_loop_task(void *param)
         {
             int64_t loop_start_us = esp_timer_get_time();
 
-            as5600_update(&wrist.axis_a.encoder);
+            bool enc_a_ok = as5600_update(&wrist.axis_a.encoder);
+            bool enc_b_ok = as5600_update(&wrist.axis_b.encoder);
+            if (enc_a_ok && enc_b_ok) {
+                clear_error_flag(ERROR_FLAG_ENCODER);
+            } else {
+                set_error_flag(ERROR_FLAG_ENCODER);
+            }
+
             diff_pos_feedback = as5600_get_position(&wrist.axis_a.encoder);
             diff_pos_delta = diff_pos_feedback - wrist.axis_a.pos;
             diff_vel_feedback = AS5600_A_VELOCITY_FILTER_ALPHA * (diff_pos_delta / dt_s) + (1 - AS5600_A_VELOCITY_FILTER_ALPHA) * diff_vel_feedback;
             wrist.axis_a.pos = diff_pos_feedback;
             wrist.axis_a.vel = diff_vel_feedback;
 
-            as5600_update(&wrist.axis_b.encoder);
             comm_pos_feedback = as5600_get_position(&wrist.axis_b.encoder);
             comm_pos_delta = comm_pos_feedback - wrist.axis_b.pos;
             comm_vel_feedback = AS5600_B_VELOCITY_FILTER_ALPHA * (comm_pos_delta / dt_s) + (1 - AS5600_B_VELOCITY_FILTER_ALPHA) * comm_vel_feedback;
@@ -518,6 +565,7 @@ void micro_ros_task(void *arg)
             }
             else
             {
+                set_error_flag(ERROR_FLAG_AGENT);
                 vTaskDelay(pdMS_TO_TICKS(UROS_RECONNECT_DELAY_MS));
             }
             break;
@@ -536,12 +584,14 @@ void micro_ros_task(void *arg)
             {
                 state = AGENT_CONNECTED;
                 last_ping_check_us = esp_timer_get_time();
+                clear_error_flag(ERROR_FLAG_AGENT);
                 ESP_LOGI(TAG, "Agent connected");
             }
             else
             {
                 ESP_LOGW(TAG, "Entity creation failed, retrying...");
                 destroy_micro_ros_entities(&support, &node, &timer, &executor);
+                set_error_flag(ERROR_FLAG_AGENT);
                 state = WAITING_AGENT;
                 vTaskDelay(pdMS_TO_TICKS(UROS_RECONNECT_DELAY_MS));
             }
@@ -569,6 +619,7 @@ void micro_ros_task(void *arg)
 
         case AGENT_DISCONNECTED:
             ESP_LOGW(TAG, "Agent disconnected, destroying entities...");
+            set_error_flag(ERROR_FLAG_AGENT);
             rmw_context_t *rmw_context = rcl_context_get_rmw_context(&support.context);
             if (rmw_context != NULL)
             {
@@ -589,6 +640,9 @@ void micro_ros_task(void *arg)
 void app_main(void)
 {
     ESP_LOGI(TAG, "Starting Setup...");
+
+    led_init();
+    clear_error_flag(0); // all clear → ok LED on
 
     snprintf(axis_a_state_publisher_topic, TOPIC_BUFFER_SIZE, "/%s/%s/get_state", ROBOT_NAME, AXIS_A_NAME);
     snprintf(axis_a_command_subscriber_topic, TOPIC_BUFFER_SIZE, "/%s/%s/send_command", ROBOT_NAME, AXIS_A_NAME);
@@ -634,7 +688,9 @@ void app_main(void)
     if (!ok1 || !ok2)
     {
         ESP_LOGE(TAG, "Failed to initialize one or both encoders (ok1=%d, ok2=%d)", ok1, ok2);
-        return;
+        set_error_flag(ERROR_FLAG_ENCODER);
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        esp_restart();
     }
 
     ESP_LOGI(TAG, "Encoders initialized");
@@ -655,6 +711,7 @@ void app_main(void)
         1);
 
     homing_task(&homing_params);
+    gpio_set_level(LED_HOMED_PIN, 0); // homed LED on
 
 #if defined(RMW_UXRCE_TRANSPORT_CUSTOM)
     rmw_uros_set_custom_transport(
