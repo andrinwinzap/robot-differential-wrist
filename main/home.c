@@ -1,6 +1,7 @@
 #include "home.h"
 #include "esp_log.h"
 #include "math.h"
+#include <stdbool.h>
 
 static const char *TAG = "HOMING";
 
@@ -19,7 +20,7 @@ bool reached_target_pos(axis_t *axis)
     return (fabs(axis->pos - axis->pos_ctrl) < POSITION_TOLERANCE);
 }
 
-void homing_task(void *pvParams)
+bool homing_task(void *pvParams)
 {
     homing_params_t *params = (homing_params_t *)pvParams;
 
@@ -50,6 +51,17 @@ void homing_task(void *pvParams)
     params->wrist->axis_b.pos_ctrl = 2.0f;
     while (true)
     {
+        if (!as5600_update(&params->wrist->axis_a.encoder) ||
+            !as5600_update(&params->wrist->axis_b.encoder))
+        {
+            ESP_LOGE(TAG, "Encoder disconnected during homing");
+            params->wrist->axis_a.vel_ctrl = 0.0f;
+            params->wrist->axis_b.vel_ctrl = 0.0f;
+            params->wrist->axis_a.pos_ctrl = params->wrist->axis_a.pos;
+            params->wrist->axis_b.pos_ctrl = params->wrist->axis_b.pos;
+            return false;
+        }
+
         if (xSemaphoreTake(params->homing_semaphore, portMAX_DELAY) == pdTRUE)
         {
             if (state != last_logged_state)
@@ -144,7 +156,7 @@ void homing_task(void *pvParams)
                 break;
 
             case FINISHED:
-                return;
+                return true;
             }
             taskYIELD();
         }

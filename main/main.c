@@ -710,7 +710,12 @@ void app_main(void)
         NULL,
         1);
 
-    homing_task(&homing_params);
+    if (!homing_task(&homing_params)) {
+        ESP_LOGE(TAG, "Homing failed! Restarting in 5 seconds...");
+        set_error_flag(ERROR_FLAG_ENCODER);
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        esp_restart();
+    }
     gpio_set_level(LED_HOMED_PIN, 0); // homed LED on
 
 #if defined(RMW_UXRCE_TRANSPORT_CUSTOM)

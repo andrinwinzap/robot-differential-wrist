@@ -11,6 +11,6 @@ typedef struct
     wrist_t *wrist;
 } homing_params_t;
 
-void homing_task(void *param);
+bool homing_task(void *param);
 
 #endif // HOME_H
